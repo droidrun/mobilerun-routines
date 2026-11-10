@@ -25,11 +25,26 @@ class EntryPoint:
     takes_ctx: bool
     input_model: type[BaseModel]
     output_model: type[BaseModel] | None
-    output_kind: OutputKind
+
+    @property
+    def output_kind(self) -> OutputKind:
+        if self.output_model is None:
+            return "none"
+        return "dataset" if issubclass(self.output_model, Dataset) else "value"
 
 
 # Entry points by the `__module__` of the decorated function (one per module).
 _ENTRY_POINTS: dict[str, EntryPoint] = {}
+
+
+def take(module: str) -> EntryPoint | None:
+    """Remove and return the entry point registered for `module`, if any."""
+    return _ENTRY_POINTS.pop(module, None)
+
+
+def reset() -> None:
+    """Forget every registered entry point."""
+    _ENTRY_POINTS.clear()
 
 
 def _is_model(tp: Any) -> bool:
@@ -93,19 +108,17 @@ def _build(func: Any) -> EntryPoint:
         )
 
     takes_ctx = len(params) == 2
-    if takes_ctx and params[1].name in hints and hints[params[1].name] is not Context:
-        raise EntryPointError(
-            f"parameter '{params[1].name}': annotation must be Context, "
-            f"got {_describe(hints[params[1].name])}"
-        )
+    if takes_ctx:
+        ctx_name = params[1].name
+        if ctx_name not in hints:
+            raise EntryPointError(f"parameter '{ctx_name}': missing annotation (Context)")
+        if hints[ctx_name] is not Context:
+            raise EntryPointError(
+                f"parameter '{ctx_name}': annotation must be Context, "
+                f"got {_describe(hints[ctx_name])}"
+            )
 
     output_model = _output_model(hints)
-    if output_model is None:
-        kind: OutputKind = "none"
-    elif issubclass(output_model, Dataset):
-        kind = "dataset"
-    else:
-        kind = "value"
     return EntryPoint(
         func=func,
         name=func.__name__,
@@ -113,7 +126,6 @@ def _build(func: Any) -> EntryPoint:
         takes_ctx=takes_ctx,
         input_model=input_model,
         output_model=output_model,
-        output_kind=kind,
     )
 
 

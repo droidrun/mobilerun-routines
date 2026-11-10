@@ -1,36 +1,29 @@
 import json
 
+import pytest
+from script_source import script_source
+
 from mobilerun_sandbox import cli
 
-SAMPLE = """
-from pydantic import BaseModel
-from mobilerun_sandbox import Context, script
+SAMPLE = script_source(
+    "return Out(greeting=input.name)",
+    models="""
+    class Address(BaseModel):
+        city: str
 
-class Address(BaseModel):
-    city: str
+    class In(BaseModel):
+        name: str
+        count: int = 1
+        address: Address
 
-class In(BaseModel):
-    name: str
-    count: int = 1
-    address: Address
-
-class Out(BaseModel):
-    greeting: str
-
-@script
-def main(input: In, ctx: Context) -> Out:
-    return Out(greeting=input.name)
-"""
+    class Out(BaseModel):
+        greeting: str
+    """,
+)
 
 
-def inspect(write_script, capsys, source):
-    code = cli.main(["inspect", str(write_script(source))])
-    captured = capsys.readouterr()
-    return code, captured.out, captured.err
-
-
-def test_inspect_sample(write_script, capsys):
-    code, out, err = inspect(write_script, capsys, SAMPLE)
+def test_inspect_sample(inspect_source):
+    code, out, err = inspect_source(SAMPLE)
     assert code == 0 and err == ""
     doc = json.loads(out)
     assert doc["entrypoint"] == "main" and doc["async"] is False
@@ -55,45 +48,24 @@ def test_inspect_sample(write_script, capsys):
     }
 
 
-def test_inspect_async_and_no_output(write_script, capsys):
-    code, out, _ = inspect(
-        write_script,
-        capsys,
-        """
-from pydantic import BaseModel
-from mobilerun_sandbox import script
-
-class In(BaseModel):
-    x: int
-
-@script
-async def main(input: In) -> None:
-    pass
-""",
-    )
+def test_inspect_async_and_no_output(inspect_source):
+    code, out, _ = inspect_source(script_source(ret=None, sig="input: In", is_async=True))
     doc = json.loads(out)
     assert code == 0 and doc["async"] is True
     assert doc["outputSchema"] is None and doc["outputKind"] == "none"
 
 
-def test_inspect_dataset_output_kind(write_script, capsys):
-    code, out, _ = inspect(
-        write_script,
-        capsys,
-        """
-from pydantic import BaseModel
-from mobilerun_sandbox import Dataset, script
-
-class In(BaseModel):
-    x: int
-
-class Item(BaseModel):
-    id: str
-
-@script
-def main(input: In) -> Dataset[Item]:
-    return Dataset(items=[])
-""",
+def test_inspect_dataset_output_kind(inspect_source):
+    code, out, _ = inspect_source(
+        script_source(
+            "return Dataset(items=[])",
+            sig="input: In",
+            ret="Dataset[Item]",
+            before="""
+            class Item(BaseModel):
+                id: str
+            """,
+        )
     )
     doc = json.loads(out)
     assert code == 0 and doc["outputKind"] == "dataset"
@@ -103,151 +75,112 @@ def main(input: In) -> Dataset[Item]:
     assert "$defs" not in json.dumps(doc)
 
 
-def _rejects(write_script, capsys, field_source, expected):
-    code, out, err = inspect(
-        write_script,
-        capsys,
-        f"""
-from datetime import datetime
-from pydantic import BaseModel, Field
-from mobilerun_sandbox import script
-
-class In(BaseModel):
-    ok: str
-    {field_source}
-
-@script
-def main(input: In) -> None:
-    pass
-""",
-    )
-    assert code == 3 and out == ""
-    assert expected in err and err.count("\n") == 1
+def _with_model(models: str, ret: str = "None") -> str:
+    return script_source(sig="input: In", ret=ret, models=models)
 
 
-def test_inspect_rejects_pattern(write_script, capsys):
-    _rejects(write_script, capsys, "code: str = Field(pattern='^a+$')", "field 'code'")
+REJECTED = {
+    "pattern": ("code: str = Field(pattern='^a+$')", "field 'code'", "'pattern'"),
+    "format": ("when: datetime", "field 'when'", "'format'"),
+    "date key": ("by_day: dict[date, int]", "field 'by_day", "'format'"),
+    "discriminator": (
+        "item: Annotated[A | B, Field(discriminator='kind')]",
+        "field 'item'",
+        "'discriminator'",
+    ),
+}
 
-
-def test_inspect_rejects_format(write_script, capsys):
-    _rejects(write_script, capsys, "when: datetime", "field 'when'")
-
-
-def test_inspect_rejects_nested_pattern_with_path(write_script, capsys):
-    code, _, err = inspect(
-        write_script,
-        capsys,
-        """
-from pydantic import BaseModel, Field
-from mobilerun_sandbox import script
-
-class Inner(BaseModel):
-    slug: str = Field(pattern='^[a-z]+$')
-
-class In(BaseModel):
-    items: list[Inner]
-
-@script
-def main(input: In) -> None:
-    pass
-""",
-    )
-    assert code == 3 and "'items[].slug'" in err and "'pattern'" in err
-
-
-def test_inspect_rejects_recursion(write_script, capsys):
-    code, _, err = inspect(
-        write_script,
-        capsys,
-        """
-from __future__ import annotations
-from pydantic import BaseModel
-from mobilerun_sandbox import script
-
-class Node(BaseModel):
-    children: list[Node] = []
-
-@script
-def main(input: Node) -> None:
-    pass
-""",
-    )
-    assert code == 3 and "recursive" in err
-
-
-def test_inspect_rejects_discriminator(write_script, capsys):
-    code, _, err = inspect(
-        write_script,
-        capsys,
-        """
-from typing import Annotated, Literal
-from pydantic import BaseModel, Field
-from mobilerun_sandbox import script
-
+EXTRA_MODELS = """
 class A(BaseModel):
     kind: Literal["a"]
 
 class B(BaseModel):
     kind: Literal["b"]
-
-class In(BaseModel):
-    item: Annotated[A | B, Field(discriminator="kind")]
-
-@script
-def main(input: In) -> None:
-    pass
-""",
-    )
-    assert code == 3 and "'discriminator'" in err
+"""
 
 
-def test_property_named_like_keyword_is_fine(write_script, capsys):
-    code, out, _ = inspect(
-        write_script,
-        capsys,
+@pytest.mark.parametrize(("field", "where", "keyword"), REJECTED.values(), ids=REJECTED)
+def test_inspect_rejects_keywords_outside_the_subset(inspect_source, field, where, keyword):
+    models = f"{EXTRA_MODELS}\nclass In(BaseModel):\n    ok: str\n    {field}\n"
+    code, out, err = inspect_source(_with_model(models))
+    assert code == 3 and out == ""
+    assert where in err and keyword in err and err.count("\n") == 1
+
+
+def test_inspect_rejects_nested_pattern_with_path(inspect_source):
+    models = """
+    class Inner(BaseModel):
+        slug: str = Field(pattern='^[a-z]+$')
+
+    class In(BaseModel):
+        items: list[Inner]
+    """
+    code, _, err = inspect_source(_with_model(models))
+    assert code == 3 and "'items[].slug'" in err and "'pattern'" in err
+
+
+def test_inspect_rejects_recursion(inspect_source):
+    source = "from __future__ import annotations\n" + _with_model(
         """
-from pydantic import BaseModel
-from mobilerun_sandbox import script
-
-class In(BaseModel):
-    pattern: str
-    format: str
-    title: str
-
-@script
-def main(input: In) -> None:
-    pass
-""",
+            class In(BaseModel):
+                children: list[In] = []
+            """
     )
+    code, _, err = inspect_source(source)
+    assert code == 3 and "recursive" in err
+
+
+def test_enum_dictionary_keys_are_inlined(inspect_source):
+    models = """
+    class Color(str, Enum):
+        red = "red"
+        blue = "blue"
+
+    class In(BaseModel):
+        votes: dict[Color, int]
+    """
+    code, out, _ = inspect_source(_with_model(models))
+    assert code == 0
+    names = json.loads(out)["inputSchema"]["properties"]["votes"]["propertyNames"]
+    assert names == {"enum": ["red", "blue"], "type": "string"}
+    assert "$ref" not in out and "$defs" not in out
+
+
+def test_property_named_like_keyword_is_fine(inspect_source):
+    models = """
+    class In(BaseModel):
+        pattern: str
+        format: str
+        title: str
+    """
+    code, out, _ = inspect_source(_with_model(models))
     assert code == 0
     assert set(json.loads(out)["inputSchema"]["properties"]) == {"pattern", "format", "title"}
 
 
-def test_inspect_no_entry_point(write_script, capsys):
-    code, out, err = inspect(write_script, capsys, "x = 1\n")
+def test_inspect_no_entry_point(inspect_source):
+    code, out, err = inspect_source("x = 1\n")
     assert code == 3 and out == "" and "no entry point" in err
 
 
-def test_inspect_wrong_signature(write_script, capsys):
-    code, out, err = inspect(
-        write_script,
-        capsys,
-        """
-from mobilerun_sandbox import script
-
-@script
-def main(input):
-    pass
-""",
-    )
+def test_inspect_wrong_signature(inspect_source):
+    code, out, err = inspect_source(script_source(sig="input"))
     assert code == 3 and "'input'" in err and err.count("\n") == 1
 
 
-def test_inspect_import_error(write_script, capsys):
-    code, _, err = inspect(write_script, capsys, "import nonexistent_module_xyz\n")
-    assert code == 3 and "ModuleNotFoundError" in err
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("import nonexistent_module_xyz\n", "ModuleNotFoundError"),
+        ("import sys\nsys.exit(0)\n", "SystemExit: 0"),
+        ("open('missing-resource')\n", "FileNotFoundError"),
+    ],
+)
+def test_inspect_import_time_failure(inspect_source, source, expected):
+    code, out, err = inspect_source(source)
+    assert code == 3 and out == "" and expected in err and err.count("\n") == 1
 
 
 def test_inspect_missing_file(tmp_path, capsys):
     assert cli.main(["inspect", str(tmp_path / "nope.py")]) == 3
-    assert "FileNotFoundError" in capsys.readouterr().err
+    assert "cannot read script" in capsys.readouterr().err

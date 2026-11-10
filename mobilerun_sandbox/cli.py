@@ -6,12 +6,10 @@ import argparse
 import json
 import sys
 from datetime import datetime
-from typing import NoReturn
-
-from pydantic.errors import PydanticInvalidForJsonSchema, PydanticUserError
+from typing import NoReturn, get_args
 
 from ._version import SDK_VERSION
-from .context import RunInfo
+from .context import RunInfo, RunMode
 from .errors import EntryPointError
 from .loader import ScriptImportError, load_script
 from .runner import (
@@ -24,7 +22,7 @@ from .runner import (
 )
 from .schema import SchemaError, input_schema, output_schema
 
-MODES = ("live", "dry_run", "verification")
+MODES = get_args(RunMode)
 
 
 class _Parser(argparse.ArgumentParser):
@@ -58,23 +56,25 @@ def _parser() -> argparse.ArgumentParser:
 def _inspect(path: str) -> int:
     try:
         entry = load_script(path)
-        output_kind = entry.output_kind
         document = {
             "entrypoint": entry.name,
             "async": entry.is_async,
             "inputSchema": input_schema(entry.input_model),
             "outputSchema": output_schema(entry.output_model) if entry.output_model else None,
-            "outputKind": output_kind,
+            "outputKind": entry.output_kind,
             "sdkVersion": SDK_VERSION,
         }
+    except OSError as exc:
+        return _reject(f"cannot read script: {exc}")
     except (EntryPointError, ScriptImportError, SchemaError) as exc:
-        sys.stderr.write(" ".join(str(exc).split()) + "\n")
-        return EXIT_NO_ENTRY_POINT
-    except (PydanticInvalidForJsonSchema, PydanticUserError) as exc:
-        sys.stderr.write(f"cannot build JSON Schema: {str(exc).splitlines()[0]}\n")
-        return EXIT_NO_ENTRY_POINT
+        return _reject(str(exc))
     sys.stdout.write(json.dumps(document) + "\n")
     return EXIT_OK
+
+
+def _reject(message: str) -> int:
+    sys.stderr.write(" ".join(message.split()) + "\n")
+    return EXIT_NO_ENTRY_POINT
 
 
 def _run(args: argparse.Namespace) -> int:

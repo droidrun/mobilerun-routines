@@ -10,14 +10,14 @@ from typing import Any
 import pytest
 
 from mobilerun_sandbox import cli
-from mobilerun_sandbox.entry import _ENTRY_POINTS
+from mobilerun_sandbox.entry import reset
 
 
 @pytest.fixture(autouse=True)
 def clean_registry():
-    _ENTRY_POINTS.clear()
+    reset()
     yield
-    _ENTRY_POINTS.clear()
+    reset()
 
 
 @pytest.fixture
@@ -72,3 +72,13 @@ def run_script(tmp_path: Path, write_script, capsys) -> Callable[..., RunResult]
         return RunResult(code, envelope, captured.out, captured.err)
 
     return _run
+
+
+@pytest.fixture
+def inspect_source(write_script, capsys) -> Callable[[str], tuple[int, str, str]]:
+    def _inspect(source: str) -> tuple[int, str, str]:
+        code = cli.main(["inspect", str(write_script(source))])
+        captured = capsys.readouterr()
+        return code, captured.out, captured.err
+
+    return _inspect

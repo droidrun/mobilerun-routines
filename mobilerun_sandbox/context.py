@@ -9,14 +9,18 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictInt, TypeAdapter
 
+from ._io import atomic_write_text, dumps_json
 from .errors import NotAvailableError
 
 RESULT_MAX_BYTES = 524288
 STATE_MAX_BYTES = 524288
-PARTIAL_REASON_MAX_CHARS = 500
 STATUS_FILE_ENV = "MOBILERUN_SANDBOX_STATUS_FILE"
+
+
+RunMode = Literal["live", "dry_run", "verification"]
+_STRICT_INT = TypeAdapter(StrictInt)
 
 
 @dataclass(frozen=True)
@@ -24,7 +28,7 @@ class RunInfo:
     run_id: str
     attempt: int
     deadline: datetime | None
-    mode: Literal["live", "dry_run", "verification"]
+    mode: RunMode
     device_id: str | None
 
 
@@ -52,11 +56,8 @@ class Log:
         path = os.environ.get(STATUS_FILE_ENV)
         if not path:
             return
-        tmp = f"{path}.tmp"
         try:
-            with open(tmp, "w", encoding="utf-8") as fh:
-                fh.write(_one_line(msg) + "\n")
-            os.replace(tmp, path)
+            atomic_write_text(path, _one_line(msg) + "\n")
         except OSError:
             pass  # status is best effort and never fails the script
 
@@ -96,12 +97,8 @@ class State:
         """Record the snapshot the platform stores after a successful run (last call wins)."""
         if not self._configured:
             raise NotAvailableError("state.save")
-        if isinstance(schema, bool) or not isinstance(schema, int):
-            raise TypeError("schema must be an int")
-        if isinstance(data, BaseModel):
-            payload = data.model_dump_json()
-        else:
-            payload = json.dumps(data, allow_nan=False)
+        schema = _STRICT_INT.validate_python(schema)
+        payload = data.model_dump_json() if isinstance(data, BaseModel) else dumps_json(data)
         # Copy now so later changes to `data` do not alter the snapshot.
         self._saved = StateSnapshot(schema=schema, data=json.loads(payload))
 
@@ -126,9 +123,9 @@ class Context:
 
     def partial(self, reason: str) -> None:
         """Mark the run as partial; the entry point still returns its result."""
-        if not isinstance(reason, str) or not reason.strip():
-            raise ValueError("reason must be a non-empty string")
-        self._partial_reason = reason[:PARTIAL_REASON_MAX_CHARS]
+        if not isinstance(reason, str):
+            raise TypeError("reason must be a string")
+        self._partial_reason = reason
 
     @property
     def partial_reason(self) -> str | None:
