@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 from script_source import GREETER, script_source
 
-from mobilerun_sandbox import RESULT_MAX_BYTES, STATE_MAX_BYTES, cli
+from mobilerun_sandbox import (
+    ERROR_MESSAGE_MAX_CHARS,
+    RESULT_MAX_BYTES,
+    STATE_MAX_BYTES,
+    cli,
+)
 from mobilerun_sandbox._io import atomic_write_text
 from mobilerun_sandbox._version import SDK_VERSION
 
@@ -46,7 +51,7 @@ def test_unexpected_exception(run_script):
     assert r.envelope["ok"] is False
     assert error["code"] == "script_error" and error["retryable"] is False
     assert error["message"].startswith("ValueError: boom x")
-    assert len(error["message"]) == len("ValueError: ") + 500
+    assert len(error["message"]) == ERROR_MESSAGE_MAX_CHARS  # the cap covers the whole message
     assert "Traceback" in r.err
 
 
@@ -348,11 +353,15 @@ def test_partial_without_result(run_script):
     }
 
 
-@pytest.mark.parametrize("reason", ["x" * 501, ""], ids=["501-chars", "empty"])
-def test_partial_reason_is_kept_as_given(run_script, reason):
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [("x" * 500, "x" * 500), ("x" * 501, "x" * 500), ("", "")],
+    ids=["at-cap", "over-cap", "empty"],
+)
+def test_partial_reason_cap_boundaries(run_script, reason, expected):
     r = run_script(script_source(f"ctx.partial({reason!r})", ret="None"))
     assert r.code == 0
-    assert r.envelope["outcome"] == "partial" and r.envelope["partialReason"] == reason
+    assert r.envelope["outcome"] == "partial" and r.envelope["partialReason"] == expected
 
 
 def test_partial_is_dropped_on_failure(run_script):
@@ -396,7 +405,7 @@ def test_result_size_counts_utf8_bytes(run_script):
 # dataset
 
 DATASET = script_source(
-    'return Dataset(items=[Item(id="a", price=1.5), {"id": "b", "price": 2}], complete=False)',
+    'return Dataset(items=[Item(id="a", price=1.5), {"id": "b", "price": 2}])',
     ret="Dataset[Item]",
     before="""
     class Item(BaseModel):
@@ -411,19 +420,14 @@ def test_dataset_round_trip(run_script):
     assert r.code == 0
     assert r.envelope["result"] == {
         "items": [{"id": "a", "price": 1.5}, {"id": "b", "price": 2.0}],
-        "complete": False,
     }
-
-
-def test_dataset_complete_defaults_to_true(run_script):
-    r = run_script(DATASET.replace(", complete=False", ""))
-    assert r.envelope["result"]["complete"] is True
+    assert "dataset" not in r.envelope  # only with --dataset-file
 
 
 # state
 
 STATE_BODY = """
-ctx.log.info(f"prev={ctx.state.previous!r} version={ctx.state.previous_version}")
+ctx.log.info(f"prev={ctx.state.previous!r} schema={ctx.state.previous_schema}")
 if input.name == "save":
     ctx.state.save({"seen": ["a", "b"], "n": input.count}, schema=2)
 if input.name == "save_default":
@@ -438,7 +442,7 @@ STATE_SCRIPT = script_source(STATE_BODY)
 
 def test_state_flag_absent(run_script):
     r = run_script(STATE_SCRIPT)
-    assert r.code == 0 and "prev=None version=None" in r.err and "state" not in r.envelope
+    assert r.code == 0 and "prev=None schema=None" in r.err and "state" not in r.envelope
 
 
 def test_state_save_without_flag_raises(run_script):
@@ -449,7 +453,7 @@ def test_state_save_without_flag_raises(run_script):
 
 def test_state_null(run_script):
     r = run_script(STATE_SCRIPT, state=None)
-    assert r.code == 0 and "prev=None version=None" in r.err and "state" not in r.envelope
+    assert r.code == 0 and "prev=None schema=None" in r.err and "state" not in r.envelope
 
 
 def test_state_null_then_save(run_script):
@@ -459,9 +463,9 @@ def test_state_null_then_save(run_script):
 
 
 def test_state_previous_snapshot(run_script):
-    previous = {"version": 7, "meta": {"schema": 1}, "data": {"n": 41}}
+    previous = {"version": 7, "meta": {"schema": 3}, "data": {"n": 41}}
     r = run_script(STATE_SCRIPT, state=previous)
-    assert r.code == 0 and "prev={'n': 41} version=7" in r.err
+    assert r.code == 0 and "prev={'n': 41} schema=3" in r.err
     assert "state" not in r.envelope  # nothing saved, nothing returned
 
 

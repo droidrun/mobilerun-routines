@@ -12,6 +12,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, StrictInt, TypeAdapter
 
 from ._io import atomic_write_text, dumps_json
+from .dataset import DatasetSink
 from .errors import NotAvailableError
 
 RESULT_MAX_BYTES = 524288
@@ -77,11 +78,11 @@ class State:
         self,
         configured: bool = False,
         previous: Any = None,
-        previous_version: int | None = None,
+        previous_schema: int | None = None,
     ) -> None:
         self._configured = configured
         self._previous = previous
-        self._previous_version = previous_version
+        self._previous_schema = previous_schema
         self._saved: StateSnapshot | None = None
 
     @property
@@ -90,8 +91,9 @@ class State:
         return self._previous
 
     @property
-    def previous_version(self) -> int | None:
-        return self._previous_version
+    def previous_schema(self) -> int | None:
+        """The `schema` the previous snapshot was saved with, or `None` without one."""
+        return self._previous_schema
 
     def save(self, data: Any, schema: int = 1) -> None:
         """Record the snapshot the platform stores after a successful run (last call wins)."""
@@ -115,17 +117,19 @@ class Context:
         run: RunInfo,
         log: Log | None = None,
         state: State | None = None,
+        dataset: DatasetSink | None = None,
     ) -> None:
         self.run = run
         self.log = log if log is not None else Log()
         self.state = state if state is not None else State()
+        self.dataset = dataset if dataset is not None else DatasetSink()
         self._partial_reason: str | None = None
 
     def partial(self, reason: str) -> None:
         """Mark the run as partial; the entry point still returns its result."""
         if not isinstance(reason, str):
             raise TypeError("reason must be a string")
-        self._partial_reason = reason
+        self._partial_reason = str.__str__(reason)  # a plain str
 
     @property
     def partial_reason(self) -> str | None:

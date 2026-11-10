@@ -8,7 +8,11 @@ from pydantic import BaseModel
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticUserError
 from pydantic.json_schema import JsonSchemaMode
 
-REJECTED_KEYWORDS = ("pattern", "patternProperties", "format", "prefixItems", "discriminator")
+from .dataset import KEY_MARKER
+
+REJECTED_KEYWORDS = ("pattern", "patternProperties", "prefixItems", "discriminator")
+# The `format` values the platform validates (`ajv-formats` in triggers-api).
+ALLOWED_FORMATS = ("date-time", "date", "uuid", "uri", "email")
 # Keywords whose value is a map of name -> schema.
 _SCHEMA_MAPS = ("properties", "patternProperties", "dependentSchemas")
 # Keywords whose value is one schema, with the path suffix that names the position.
@@ -52,6 +56,8 @@ def _walk(node: Any, defs: dict[str, Any], stack: tuple[str, ...], path: str) ->
     for key, value in node.items():
         if key in REJECTED_KEYWORDS:
             raise SchemaError(f"{_where(path)}: keyword '{key}' is not supported")
+        if key == "format" and value not in ALLOWED_FORMATS:
+            raise SchemaError(f"{_where(path)}: format '{value}' is not supported")
         if key in ("title", "$defs", "definitions"):
             continue
         if key in _SCHEMA_MAPS and isinstance(value, dict):
@@ -76,6 +82,25 @@ def model_schema(model: type[BaseModel], mode: JsonSchemaMode) -> dict[str, Any]
         raise SchemaError(f"cannot build JSON Schema: {str(exc).splitlines()[0]}") from exc
     defs = {**raw.get("definitions", {}), **raw.get("$defs", {})}
     return _walk(raw, defs, (), "")
+
+
+def dataset_key(schema: dict[str, Any]) -> str:
+    """Name of the one item field marked with `key_field` in the schema of a `Dataset[Item]`.
+
+    The name is the serialization name, as it appears in the dataset lines. Raises
+    `SchemaError` without exactly one key or when the key does not serialise to a JSON string or
+    integer (so a `UUID` is fine and a `float` is not).
+    """
+    items = schema.get("properties", {}).get("items", {}).get("items", {})
+    properties = items.get("properties", {}) if isinstance(items, dict) else {}
+    keys = [name for name, prop in properties.items() if prop.get(KEY_MARKER) is True]
+    if not keys:
+        raise SchemaError("dataset items have no key: mark one field with key_field()")
+    if len(keys) > 1:
+        raise SchemaError(f"dataset items have more than one key: {', '.join(keys)}")
+    if properties[keys[0]].get("type") not in ("string", "integer"):
+        raise SchemaError(f"the key field '{keys[0]}' must serialise to a string or an integer")
+    return keys[0]
 
 
 def input_schema(model: type[BaseModel]) -> dict[str, Any]:

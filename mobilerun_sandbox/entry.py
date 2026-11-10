@@ -32,6 +32,15 @@ class EntryPoint:
             return "none"
         return "dataset" if issubclass(self.output_model, Dataset) else "value"
 
+    @property
+    def item_type(self) -> Any:
+        """The `Item` of a `Dataset[Item]` output; `Any` for a bare `Dataset`."""
+        if self.output_kind != "dataset":
+            return None
+        annotation = self.output_model.model_fields["items"].annotation
+        (item,) = typing.get_args(annotation)
+        return Any if isinstance(item, typing.TypeVar) else item
+
 
 # Entry points by the `__module__` of the decorated function (one per module).
 _ENTRY_POINTS: dict[str, EntryPoint] = {}

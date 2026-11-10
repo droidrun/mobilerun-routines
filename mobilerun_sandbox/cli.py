@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
 from datetime import datetime
@@ -10,7 +11,7 @@ from typing import NoReturn, get_args
 
 from ._version import SDK_VERSION
 from .context import RunInfo, RunMode
-from .errors import EntryPointError
+from .errors import EntryPointError, NoEntryPointError
 from .loader import ScriptImportError, load_script
 from .runner import (
     EXIT_NO_ENTRY_POINT,
@@ -20,7 +21,7 @@ from .runner import (
     RunOptions,
     run,
 )
-from .schema import SchemaError, input_schema, output_schema
+from .schema import SchemaError, dataset_key, input_schema, output_schema
 
 MODES = get_args(RunMode)
 
@@ -45,6 +46,7 @@ def _parser() -> argparse.ArgumentParser:
     run_p.add_argument("--input-file", required=True)
     run_p.add_argument("--result-file", required=True)
     run_p.add_argument("--state-file")
+    run_p.add_argument("--dataset-file")
     run_p.add_argument("--run-id", default="local")
     run_p.add_argument("--attempt", type=int, default=1)
     run_p.add_argument("--mode", choices=MODES, default="live")
@@ -55,25 +57,40 @@ def _parser() -> argparse.ArgumentParser:
 
 def _inspect(path: str) -> int:
     try:
-        entry = load_script(path)
-        document = {
-            "entrypoint": entry.name,
-            "async": entry.is_async,
-            "inputSchema": input_schema(entry.input_model),
-            "outputSchema": output_schema(entry.output_model) if entry.output_model else None,
-            "outputKind": entry.output_kind,
-            "sdkVersion": SDK_VERSION,
-        }
+        # The script runs at import: what it prints must not end up in the JSON on stdout.
+        with contextlib.redirect_stdout(sys.stderr):
+            entry = load_script(path)
+            output = output_schema(entry.output_model) if entry.output_model else None
+            document = {
+                "ok": True,
+                "entrypoint": entry.name,
+                "async": entry.is_async,
+                "inputSchema": input_schema(entry.input_model),
+                "outputSchema": output,
+                "outputKind": entry.output_kind,
+                "datasetKey": dataset_key(output) if entry.output_kind == "dataset" else None,
+                "sdkVersion": SDK_VERSION,
+            }
     except OSError as exc:
-        return _reject(f"cannot read script: {exc}")
-    except (EntryPointError, ScriptImportError, SchemaError) as exc:
-        return _reject(str(exc))
+        return _reject("import_failed", f"cannot read script: {exc}")
+    except NoEntryPointError as exc:
+        return _reject("no_entry_point", str(exc))
+    except EntryPointError as exc:
+        return _reject("entry_point_invalid", str(exc))
+    except ScriptImportError as exc:
+        return _reject("import_failed", str(exc))
+    except SchemaError as exc:
+        return _reject("schema_unsupported", str(exc))
     sys.stdout.write(json.dumps(document) + "\n")
     return EXIT_OK
 
 
-def _reject(message: str) -> int:
-    sys.stderr.write(" ".join(message.split()) + "\n")
+def _reject(code: str, message: str) -> int:
+    """Report why `inspect` failed: a JSON error on stdout and one line on stderr."""
+    message = " ".join(message.split())
+    document = {"ok": False, "error": {"code": code, "message": message}}
+    sys.stdout.write(json.dumps(document) + "\n")
+    sys.stderr.write(message + "\n")
     return EXIT_NO_ENTRY_POINT
 
 
@@ -91,6 +108,7 @@ def _run(args: argparse.Namespace) -> int:
         result_file=args.result_file,
         run_info=info,
         state_file=args.state_file,
+        dataset_file=args.dataset_file,
     )
     try:
         return run(opts)
