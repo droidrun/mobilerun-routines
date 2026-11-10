@@ -5,6 +5,9 @@ receives a validated input model and a `Context` with what the platform provides
 an output model. The package also ships the `inspect` and `run` commands the platform uses to
 read a script's schema and to execute it.
 
+Requires Python 3.11 to 3.13 and `pydantic>=2.11` (instances are re-validated by field name,
+which needs `by_name` validation from pydantic 2.11).
+
 ## Sample script
 
 ```python
@@ -63,19 +66,20 @@ On success it prints one JSON object on stdout and exits 0:
 `{"ok": true, "entrypoint", "async", "inputSchema", "outputSchema", "outputKind", "datasetKey",
 "sdkVersion"}`. `outputKind` is `value`, `dataset` or `none`. `datasetKey` is the serialization
 name of the item field marked with `key_field()` for a `Dataset[Item]` output, else `null`.
+The script runs when it is imported; what it prints goes to stderr, so stdout holds exactly the
+JSON document (output written straight to file descriptor 1 is not intercepted).
 
 On failure it exits 3 and prints `{"ok": false, "error": {"code", "message"}}` on stdout (the
 one-line message goes to stderr as well). Codes: `no_entry_point`, `entry_point_invalid`,
 `import_failed` (the script cannot be read or raises while it is imported) and
 `schema_unsupported` (a model uses something outside the supported JSON Schema subset, or a
-`Dataset` item model does not have exactly one key field of type `str` or `int`).
+`Dataset` item model does not have exactly one key field that serialises to a string or an
+integer).
 
 The schemas are limited to a subset the platform can validate. `pattern`, `prefixItems`,
 `discriminator` and recursive models are rejected, and so is any `format` outside this list:
 
-<!-- formats:start -->
 `date-time`, `date`, `uuid`, `uri`, `email`
-<!-- formats:end -->
 
 That covers `datetime`, `date`, `UUID`, `AnyUrl`/`HttpUrl` and, for `email`, a `str` field with
 `Field(json_schema_extra={"format": "email"})`. `run` still validates the input with the
@@ -109,18 +113,17 @@ them; this package does not.
 
 **Limits.**
 
-<!-- limits:start -->
 - `error.message` and `partialReason` are cut to 500 characters (`ERROR_MESSAGE_MAX_CHARS`).
 - `result`: 524288 bytes of compact JSON (`RESULT_MAX_BYTES`).
 - `state`: 524288 bytes (`STATE_MAX_BYTES`).
 - dataset file: 524288 bytes (`DATASET_MAX_BYTES`).
-<!-- limits:end -->
 
 ## Datasets
 
 Return `Dataset[Item]` for a list the platform can diff between runs. Mark the field that
 identifies an item with `key_field()` (a `Field(...)` that accepts the usual arguments); exactly
-one field, a `str` or `int`, must carry it. The package does not check that keys are unique.
+one field must carry it, and it must serialise to a string or an integer (`str`, `int`, `UUID`,
+...; not `float`, `bool` or a list). The package does not check that keys are unique.
 `Dataset` has only `items`: report an incomplete list with `ctx.partial(reason)`.
 
 A long run should not lose what it found, so `run --dataset-file PATH` creates (and truncates)
@@ -142,10 +145,12 @@ this run wrote. Without it, `result` holds `{"items": [...]}` as before.
 `schema` it was saved with (`None` without a previous state), so a script can migrate a changed
 shape: `ctx.state.save(data, schema=2)`.
 
-On SIGTERM, `run` stops the entry point (sync or async), writes
+On SIGTERM, `run` stops the entry point (sync or async) and the outcome is `cancelled`, even if
+the script swallows the interruption or fails while cleaning up. It writes
 `{"ok": false, "error": {"code": "cancelled", "message": "terminated by signal", "retryable":
 false}}` (plus the `dataset` counts when a dataset file is in use) and exits 1. Lines already
-pushed stay on disk. The package has no timeout, deadline or retry logic; the platform owns those.
+pushed stay on disk; the file only ever holds complete lines, also after an interrupted write.
+`push` is safe to call from several threads. The package has no timeout, deadline or retry logic; the platform owns those.
 
 `device()`, `credentials`, `files` and `llm` on `Context` raise `NotAvailableError` in this
 version. Develop with `uv sync && uv run ruff check && uv run pytest`.

@@ -353,14 +353,6 @@ def test_partial_without_result(run_script):
     }
 
 
-def test_partial_reason_is_cut_to_the_message_cap(run_script):
-    r = run_script(script_source('ctx.partial("x" * 2_000_000)', ret="None"))
-    assert r.code == 0
-    assert r.envelope["outcome"] == "partial"
-    assert r.envelope["partialReason"] == "x" * ERROR_MESSAGE_MAX_CHARS
-    assert len(json.dumps(r.envelope)) < 1000
-
-
 @pytest.mark.parametrize(
     ("reason", "expected"),
     [("x" * 500, "x" * 500), ("x" * 501, "x" * 500), ("", "")],

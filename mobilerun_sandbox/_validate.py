@@ -3,29 +3,45 @@
 from __future__ import annotations
 
 import typing
-from functools import cache
 from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 MAX_ERROR_DETAILS = 50
 
 
-def revalidate(model: type[BaseModel], value: Any) -> BaseModel:
-    """Validate `value` against `model`; instances are checked again, not trusted.
+def _field_data(value: Any) -> Any:
+    """Plain data holding only what was set on the declared fields of `value`, by field name.
 
-    An instance may come from `model_construct` or have been changed after construction, so it
-    is dumped by field name and validated again. `by_name` makes that work for fields with
-    `alias`, `validation_alias` and `serialization_alias`. Raises `ValidationError`.
+    Models are unpacked recursively. Computed fields are output, not input, so they are left out
+    and appear again when the validated model is serialised.
     """
     if isinstance(value, BaseModel):
-        data = value.model_dump(by_alias=False, warnings=False)
-        return model.model_validate(data, by_name=True)
-    return model.model_validate(value)
+        fields = type(value).model_fields
+        data = {name: _field_data(v) for name, v in value.__dict__.items() if name in fields}
+        data.update({name: _field_data(v) for name, v in (value.model_extra or {}).items()})
+        return data
+    if isinstance(value, list | tuple | set | frozenset):
+        return type(value)(_field_data(v) for v in value)
+    if isinstance(value, dict):
+        return {key: _field_data(v) for key, v in value.items()}
+    return value
 
 
-@cache
-def _declared_names(model: type[BaseModel]) -> frozenset[str]:
+def revalidate(adapter: TypeAdapter[Any], value: Any) -> Any:
+    """Validate `value`; model instances are checked again, not trusted.
+
+    An instance may come from `model_construct` or have been changed after construction. Its
+    data is read by field name and validated by field name only: alias lookup would mix up
+    fields whose names are also aliases of other fields. (`by_name` needs pydantic 2.11.)
+    Raises `ValidationError`.
+    """
+    if isinstance(value, BaseModel):
+        return adapter.validate_python(_field_data(value), by_alias=False, by_name=True)
+    return adapter.validate_python(value)
+
+
+def _declared_names(model: Any) -> frozenset[str]:
     """Field names and aliases of `model` and every model nested in its annotations."""
     names: set[str] = set()
     seen: set[type[BaseModel]] = set()
@@ -51,7 +67,7 @@ def _declared_names(model: type[BaseModel]) -> frozenset[str]:
 
 def validation_details(exc: ValidationError, model: Any) -> list[dict[str, str]]:
     """Declared field names, list indexes and error types only; never input values or keys."""
-    declared = _declared_names(model) if isinstance(model, type) else frozenset()
+    declared = _declared_names(model)
 
     def part(component: Any) -> str:
         if isinstance(component, int) or component in declared:

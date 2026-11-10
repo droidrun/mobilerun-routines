@@ -129,7 +129,7 @@ class Context:
         """Mark the run as partial; the entry point still returns its result."""
         if not isinstance(reason, str):
             raise TypeError("reason must be a string")
-        self._partial_reason = reason
+        self._partial_reason = str.__str__(reason)  # a plain str
 
     @property
     def partial_reason(self) -> str | None:

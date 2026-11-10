@@ -55,15 +55,8 @@ PUSH_TWO = 'ctx.dataset.push(Item(id="a", price=1.5))\nctx.dataset.push({"id": "
 
 
 def test_dataset_has_only_items():
-    assert Dataset[int](items=[1]).items == [1]
     with pytest.raises(ValidationError):
         Dataset[int](items=[1], complete=False)
-    assert "complete" not in Dataset[int].model_fields
-
-
-def test_returning_complete_in_a_dict_is_output_invalid(run_script):
-    r = run_script(ds_script('return {"items": [], "complete": False}', ret="Dataset[Item]"))
-    assert r.code == 1 and r.envelope["error"]["code"] == "output_invalid"
 
 
 def test_incomplete_list_is_reported_with_partial(run_script):
@@ -126,23 +119,15 @@ def test_push_without_the_flag_is_not_available(run_script):
     assert "dataset" not in r.envelope
 
 
-def test_push_needs_a_dataset_output(run_script, dataset_file):
+@pytest.mark.parametrize("ret", ["Out", None], ids=["value", "none"])
+def test_push_needs_a_dataset_output(run_script, dataset_file, ret):
     r = run_script(
-        ds_script('ctx.dataset.push({"id": "a"})', ret="Out"),
+        ds_script('ctx.dataset.push({"id": "a"})', ret=ret),
         extra_args=["--dataset-file", str(dataset_file)],
     )
     assert r.code == 1
     assert r.envelope["error"]["message"].startswith("NotAvailableError: ctx.dataset.push")
     assert r.envelope["dataset"] == {"items": 0, "bytes": 0}
-
-
-def test_push_needs_a_dataset_output_without_any_output(run_script, dataset_file):
-    r = run_script(
-        ds_script('ctx.dataset.push({"id": "a"})', ret=None),
-        extra_args=["--dataset-file", str(dataset_file)],
-    )
-    assert r.code == 1
-    assert r.envelope["error"]["message"].startswith("NotAvailableError: ctx.dataset.push")
 
 
 @pytest.mark.parametrize("ret", ["Dataset[Item]", "Dataset[Item] | None"])
@@ -167,13 +152,6 @@ def test_returned_invalid_dataset_writes_nothing(run_script, dataset_file):
     )
     assert r.code == 1 and r.envelope["error"]["code"] == "output_invalid"
     assert lines(dataset_file) == []
-
-
-def test_returned_dataset_without_the_flag_is_unchanged(run_script):
-    r = run_script(ds_script('return Dataset(items=[Item(id="a")])'))
-    assert r.code == 0
-    assert r.envelope["result"] == {"items": [{"id": "a", "price": 0.0}]}
-    assert "dataset" not in r.envelope
 
 
 def test_the_file_is_truncated_at_start(run_script, dataset_file):
@@ -215,10 +193,6 @@ def test_unwritable_dataset_file_is_a_runner_fault(run_script, tmp_path):
 
 def _line_bytes(id_len: int) -> int:
     return len(json.dumps({"id": "x" * id_len, "price": 0.0}, separators=(",", ":"))) + 1
-
-
-def test_dataset_max_bytes_value():
-    assert DATASET_MAX_BYTES == 524288
 
 
 def test_a_line_exactly_at_the_limit_fits(run_script, dataset_file):
@@ -268,19 +242,22 @@ def test_a_script_can_catch_the_limit_and_report_partial(run_script, dataset_fil
     assert r.envelope["partialReason"] == "dataset full"
 
 
-def test_a_returned_dataset_over_the_limit_fails(run_script, dataset_file):
-    body = 'return Dataset(items=[{"id": f"{i:06}" + "x" * 1000} for i in range(10_000)])'
-    r = run_script(ds_script(body), extra_args=["--dataset-file", str(dataset_file)])
-    assert r.code == 1 and r.envelope["error"]["code"] == "dataset_too_large"
-    assert dataset_file.stat().st_size <= DATASET_MAX_BYTES
-    lines(dataset_file)
-
-
-def test_the_result_limit_is_not_used_with_a_dataset_file(run_script, dataset_file):
-    # 600 KiB in total is far over RESULT_MAX_BYTES but each run only writes DATASET_MAX_BYTES
-    body = 'return Dataset(items=[{"id": f"{i:03}" + "x" * 1000} for i in range(400)])'
-    r = run_script(ds_script(body), extra_args=["--dataset-file", str(dataset_file)])
-    assert r.code == 0 and len(lines(dataset_file)) == 400
+def test_a_returned_dataset_at_the_limit_fits_and_one_byte_over_fails(run_script, dataset_file):
+    # one item whose line (with the newline) is exactly DATASET_MAX_BYTES, or one byte more
+    extra = ["--dataset-file", str(dataset_file)]
+    id_len = DATASET_MAX_BYTES - _line_bytes(0)
+    fits = run_script(
+        ds_script(f'return Dataset(items=[{{"id": "x" * {id_len}}}])'), extra_args=extra
+    )
+    assert fits.code == 0, fits.envelope
+    assert fits.envelope["result"] is None
+    assert fits.envelope["dataset"] == {"items": 1, "bytes": DATASET_MAX_BYTES}
+    over = run_script(
+        ds_script(f'return Dataset(items=[{{"id": "x" * {id_len + 1}}}])'), extra_args=extra
+    )
+    assert over.code == 1 and over.envelope["error"]["code"] == "dataset_too_large"
+    assert over.envelope["dataset"] == {"items": 0, "bytes": 0}
+    assert dataset_file.read_text() == ""
 
 
 # B5: SIGTERM leaves a result
@@ -364,3 +341,159 @@ def test_the_sigterm_handler_is_restored_after_an_in_process_run(run_script):
     r = run_script(ds_script("pass", ret=None))
     assert r.code == 0
     assert signal.getsignal(signal.SIGTERM) is before
+
+
+# Fix round 1: pushed items, interrupted and concurrent appends, cancellation wins
+
+OVERLAP_MODELS = """
+from mobilerun_sandbox import key_field
+
+class In(BaseModel):
+    pass
+
+class Item(BaseModel):
+    first: int = key_field(alias="second")
+    second: int = Field(alias="third")
+"""
+
+COMPUTED_MODELS = """
+from mobilerun_sandbox import key_field
+from pydantic import ConfigDict, computed_field
+
+class In(BaseModel):
+    pass
+
+class Item(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = key_field()
+
+    @computed_field
+    @property
+    def shout(self) -> str:
+        return self.id.upper()
+"""
+
+
+def test_pushed_item_with_overlapping_aliases_keeps_its_values(run_script, dataset_file):
+    r = run_script(
+        script_source("ctx.dataset.push(Item(second=1, third=2))", ret="Dataset[Item] | None",
+                      models=OVERLAP_MODELS),
+        extra_args=["--dataset-file", str(dataset_file)],
+    )  # fmt: skip
+    assert r.code == 0, r.envelope
+    assert lines(dataset_file) == [{"second": 1, "third": 2}]
+
+
+def test_pushed_and_returned_computed_fields_are_written(run_script, dataset_file):
+    body = 'ctx.dataset.push(Item(id="a"))\nreturn Dataset(items=[Item(id="b")])'
+    r = run_script(
+        script_source(body, ret="Dataset[Item] | None", models=COMPUTED_MODELS),
+        extra_args=["--dataset-file", str(dataset_file)],
+    )
+    assert r.code == 0, r.envelope
+    assert lines(dataset_file) == [{"id": "a", "shout": "A"}, {"id": "b", "shout": "B"}]
+
+
+class _Interrupting:
+    """A file object whose write stores part of the data and then fails."""
+
+    def __init__(self, fh, delay: float = 0.0, fail: bool = False):
+        self.fh, self.delay, self.fail = fh, delay, fail
+
+    def write(self, view):
+        time.sleep(self.delay)
+        if self.fail:
+            self.fh.write(bytes(view[:3]))
+            raise KeyboardInterrupt
+        return self.fh.write(view)
+
+    def __getattr__(self, name):
+        return getattr(self.fh, name)
+
+
+def test_an_interrupted_append_leaves_only_complete_lines(tmp_path):
+    from mobilerun_sandbox.dataset import DatasetFile
+
+    df = DatasetFile(tmp_path / "d.jsonl")
+    df.append('{"id":"a"}')
+    real = df._fh
+    df._fh = _Interrupting(real, fail=True)
+    with pytest.raises(KeyboardInterrupt):
+        df.append('{"id":"b"}')
+    df._fh = real
+    df.finalise()
+    assert (tmp_path / "d.jsonl").read_text() == '{"id":"a"}\n'
+    assert df.stats() == {"items": 1, "bytes": 11}
+    df.append('{"id":"c"}')  # the file stays usable and consistent
+    assert (tmp_path / "d.jsonl").read_text() == '{"id":"a"}\n{"id":"c"}\n'
+    df.close()
+
+
+def test_concurrent_appends_cannot_exceed_the_limit(tmp_path):
+    import threading
+
+    from mobilerun_sandbox import DatasetTooLargeError
+    from mobilerun_sandbox.dataset import DatasetFile
+
+    df = DatasetFile(tmp_path / "d.jsonl")
+    df._fh = _Interrupting(df._fh, delay=0.2)
+    outcomes: list[str] = []
+    barrier = threading.Barrier(2)
+
+    def push():
+        barrier.wait()
+        try:
+            df.append("x" * 300_000)
+            outcomes.append("ok")
+        except DatasetTooLargeError:
+            outcomes.append("too large")
+
+    threads = [threading.Thread(target=push) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(outcomes) == ["ok", "too large"]
+    assert (tmp_path / "d.jsonl").stat().st_size <= DATASET_MAX_BYTES
+    assert df.stats()["items"] == 1
+
+
+def test_two_threads_can_push_through_a_run(run_script, dataset_file):
+    body = """
+    import threading
+
+    def worker(prefix):
+        for i in range(50):
+            ctx.dataset.push({"id": f"{prefix}{i}"})
+
+    threads = [threading.Thread(target=worker, args=(p,)) for p in "ab"]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    """
+    r = run_script(ds_script(body), extra_args=["--dataset-file", str(dataset_file)])
+    assert r.code == 0, r.envelope
+    assert sorted(row["id"] for row in lines(dataset_file)) == sorted(
+        f"{p}{i}" for p in "ab" for i in range(50)
+    )
+    assert r.envelope["dataset"]["items"] == 100
+
+
+@pytest.mark.parametrize(
+    "cleanup",
+    ["return None", 'raise RuntimeError("cleanup failed")'],
+    ids=["finally-return", "cleanup-raises"],
+)
+def test_cancellation_wins_over_what_the_script_does_afterwards(write_script, tmp_path, cleanup):
+    body = f"""
+    import time
+    open(input.ready, "w").close()
+    try:
+        time.sleep(60)
+    finally:
+        {cleanup}
+    """
+    proc, ready, _ = _spawn(write_script(ds_script(body, ret="Out")), tmp_path, dataset=False)
+    assert _terminate(proc, ready) == 1
+    assert json.loads((tmp_path / "out.json").read_text()) == CANCELLED

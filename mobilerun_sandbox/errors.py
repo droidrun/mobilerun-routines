@@ -55,10 +55,6 @@ class NotAvailableError(Exception):
 class DatasetTooLargeError(Exception):
     """`ctx.dataset.push` would take the dataset file over `DATASET_MAX_BYTES`."""
 
-    def __init__(self, limit: int) -> None:
-        super().__init__(f"the dataset would exceed {limit} bytes")
-        self.limit = limit
-
 
 class DatasetItemInvalidError(Exception):
     """An item given to `ctx.dataset.push` does not match the dataset's item model.

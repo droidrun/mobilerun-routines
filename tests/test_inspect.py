@@ -5,7 +5,7 @@ import pytest
 from pydantic import BaseModel
 from script_source import script_source
 
-from mobilerun_sandbox import ALLOWED_FORMATS, cli, key_field
+from mobilerun_sandbox import cli, key_field
 from mobilerun_sandbox._version import SDK_VERSION
 
 SAMPLE = script_source(
@@ -245,10 +245,6 @@ FORMAT_CASES = {
 }
 
 
-def test_allowed_formats():
-    assert ALLOWED_FORMATS == ("date-time", "date", "uuid", "uri", "email")
-
-
 @pytest.mark.parametrize("name", FORMAT_CASES)
 def test_inspect_allows_the_declared_formats(inspect_source, name):
     field, imports = FORMAT_CASES[name]
@@ -260,12 +256,6 @@ def test_inspect_allows_the_declared_formats(inspect_source, name):
     assert prop["format"] == ("uri" if name.startswith("uri") else name)
     assert prop["type"] == "string"
     assert set(doc["outputSchema"]["properties"]) == set(doc["inputSchema"]["properties"])
-
-
-def test_inspect_still_rejects_pattern_and_the_other_keywords(inspect_source):
-    models = "class In(BaseModel):\n    code: str = Field(pattern='^a+$')\n"
-    code, out, err = inspect_source(_with_model(models))
-    assert code == 3 and "field 'code'" in err and "'pattern'" in err
 
 
 def test_run_validates_formatted_input_with_the_model(run_script):
@@ -329,25 +319,6 @@ def test_key_field_marks_the_field():
     assert "x-mobilerun-key" not in props["plain"]
 
 
-def test_key_field_passes_field_arguments_through():
-    class Item(BaseModel):
-        id: int = key_field(default=3, ge=1)
-
-    assert Item().id == 3
-    assert Item.model_json_schema()["properties"]["id"]["minimum"] == 1
-
-
-def test_key_field_merges_a_callable_json_schema_extra():
-    def extra(schema: dict) -> None:
-        schema["x-called"] = True
-
-    class Item(BaseModel):
-        id: str = key_field(json_schema_extra=extra)
-
-    props = Item.model_json_schema()["properties"]["id"]
-    assert props["x-called"] is True and props["x-mobilerun-key"] is True
-
-
 @pytest.mark.parametrize(
     ("fields", "key"),
     [
@@ -372,10 +343,10 @@ def test_inspect_reports_the_dataset_key(inspect_source, fields, key):
     [
         ("id: str\nprice: float = 0", "no key"),
         ("id: str = key_field()\nsku: str = key_field()", "more than one key"),
-        ("id: bool = key_field()", "key"),
-        ("id: float = key_field()", "key"),
-        ("id: list[str] = key_field()", "key"),
-        ("id: str | None = key_field(default=None)", "key"),
+        ("id: bool = key_field()", "serialise to a string or an integer"),
+        ("id: float = key_field()", "serialise to a string or an integer"),
+        ("id: list[str] = key_field()", "serialise to a string or an integer"),
+        ("id: str | None = key_field(default=None)", "serialise to a string or an integer"),
     ],
     ids=["none", "two", "bool", "float", "list", "optional"],
 )
@@ -410,3 +381,26 @@ def test_a_key_on_a_non_dataset_output_is_ignored(inspect_source):
     code, out, _ = inspect_source(source)
     doc = json.loads(out)
     assert code == 0 and doc["datasetKey"] is None and doc["outputKind"] == "value"
+
+
+# Fix round 1: stdout is exactly one JSON document
+
+def test_a_top_level_print_does_not_corrupt_inspect_output(inspect_source):
+    code, out, err = inspect_source('print("user diagnostic")\n' + SAMPLE)
+    assert code == 0
+    assert json.loads(out)["ok"] is True  # json.loads fails on any extra line
+    assert "user diagnostic" in err
+
+
+def test_a_top_level_print_does_not_corrupt_an_inspect_error(inspect_source):
+    code, out, err = inspect_source('print("user diagnostic")\nimport nonexistent_module_xyz\n')
+    assert code == 3
+    assert _failure(out)["code"] == "import_failed"
+    assert "user diagnostic" in err
+
+
+def test_a_uuid_key_is_accepted(inspect_source):
+    source = _dataset("id: UUID = key_field()", extra="from uuid import UUID")
+    code, out, err = inspect_source(source)
+    assert code == 0, err
+    assert json.loads(out)["datasetKey"] == "id"

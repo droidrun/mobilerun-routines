@@ -61,14 +61,18 @@ class _Cancelled(BaseException):
 
 
 class _Cancellation:
-    """Turns the first SIGTERM into `_Cancelled` while armed, and restores the old handler."""
+    """Turns SIGTERM into `_Cancelled` in the main thread and remembers that it arrived.
+
+    A script may swallow `_Cancelled` (`finally: return`), so `requested` decides the outcome.
+    """
 
     def __init__(self) -> None:
         self.armed = True
-        self._installed = False
-        self._previous: Any = None
+        self.requested = False
+        self._previous: Any = None  # the handler to restore; `None` if none was installed
 
     def _handle(self, signum: int, frame: Any) -> None:
+        self.requested = True
         if self.armed:
             self.armed = False
             raise _Cancelled
@@ -76,15 +80,14 @@ class _Cancellation:
     def install(self) -> None:
         try:
             self._previous = signal.signal(signal.SIGTERM, self._handle)
-        except ValueError:  # not the main thread: signals cannot be handled here
-            return
-        self._installed = True
+        except ValueError:
+            pass  # not the main thread: signals cannot be handled here
 
     def disarm(self) -> None:
         self.armed = False
 
     def restore(self) -> None:
-        if self._installed and self._previous is not None:
+        if self._previous is not None:
             signal.signal(signal.SIGTERM, self._previous)
 
 
@@ -117,33 +120,39 @@ def _failure(code: str, message: str, retryable: bool = False, **extra: Any) -> 
         "ok": False,
         "error": {
             "code": code,
-            "message": message[:ERROR_MESSAGE_MAX_CHARS],
+            "message": str.__str__(message)[:ERROR_MESSAGE_MAX_CHARS],
             "retryable": retryable,
             **extra,
         },
     }
 
 
+_UNFORMATTABLE = "error message could not be formatted"
+
+
 def _script_error_code(code: Any) -> str:
     """The script's code if it is well formed and not reserved, else `script_error`."""
-    if (
-        isinstance(code, str)
-        and ERROR_CODE_PATTERN.fullmatch(code)
-        and code not in RESERVED_ERROR_CODES
-    ):
+    if not isinstance(code, str):
+        return "script_error"
+    code = str.__str__(code)  # a plain str: a subclass could lie in `==`
+    if ERROR_CODE_PATTERN.fullmatch(code) and code not in RESERVED_ERROR_CODES:
         return code
     return "script_error"
 
 
 def _failure_from_exception(exc: BaseException) -> dict[str, Any]:
-    if isinstance(exc, ScriptError):
-        return _failure(_script_error_code(exc.code), str(exc.message), bool(exc.retryable))
-    if isinstance(exc, DatasetTooLargeError):
-        return _failure("dataset_too_large", str(exc))
-    if isinstance(exc, DatasetItemInvalidError):
-        return _failure("output_invalid", str(exc), details=exc.details)
-    traceback.print_exception(exc, file=sys.stderr)
-    return _failure("script_error", f"{type(exc).__name__}: {exc}")
+    """The envelope for `exc`; never raises, whatever the exception's own methods do."""
+    try:
+        if isinstance(exc, ScriptError):
+            return _failure(_script_error_code(exc.code), str(exc.message), bool(exc.retryable))
+        if isinstance(exc, DatasetTooLargeError):
+            return _failure("dataset_too_large", str(exc))
+        if isinstance(exc, DatasetItemInvalidError):
+            return _failure("output_invalid", str(exc), details=exc.details)
+        traceback.print_exception(exc, file=sys.stderr)
+        return _failure("script_error", f"{type(exc).__name__}: {exc}")
+    except Exception:
+        return _failure("script_error", _UNFORMATTABLE)
 
 
 def _size_failure(value: Any, limit: int, code: str, what: str) -> dict[str, Any] | None:
@@ -191,7 +200,7 @@ def _serialise_result(entry: EntryPoint, value: Any) -> tuple[Any, dict[str, Any
     try:
         # Instances are validated again: they may come from model_construct or have been
         # changed after construction.
-        validated = revalidate(model, value)
+        validated = revalidate(TypeAdapter(model), value)
     except ValidationError as exc:
         return None, _failure(
             "output_invalid",
@@ -211,14 +220,15 @@ def _call(entry: EntryPoint, model_input: BaseModel, ctx: Context) -> Any:
     return result
 
 
-def _dataset_sink(entry: EntryPoint, dataset: DatasetFile | None) -> DatasetSink:
-    if dataset is None:
-        return DatasetSink()
-    if entry.output_kind != "dataset":
-        return DatasetSink(
-            unavailable="is only available when the entry point returns Dataset[Item]"
-        )
-    return DatasetSink(dataset, entry.item_type)
+def _spill_to_dataset(
+    entry: EntryPoint, dataset: DatasetFile | None, result: Any
+) -> Any:
+    """With a dataset file the returned items follow the pushed ones and `result` is empty."""
+    if dataset is None or result is None or entry.output_kind != "dataset":
+        return result
+    for item in result["items"]:
+        dataset.append(dumps_json(item))
+    return None
 
 
 def _execute(
@@ -226,7 +236,7 @@ def _execute(
 ) -> tuple[dict[str, Any], int]:
     state = _read_state(opts.state_file)
     raw_input = _read_input(opts.input_file)
-    ctx = Context(run=opts.run_info, state=state, dataset=_dataset_sink(entry, dataset))
+    ctx = Context(run=opts.run_info, state=state, dataset=DatasetSink(dataset, entry.item_type))
     try:
         try:
             model_input = entry.input_model.model_validate_json(raw_input)
@@ -238,12 +248,8 @@ def _execute(
             ), EXIT_INPUT_INVALID
         value = _call(entry, model_input, ctx)
         result, failure = _serialise_result(entry, value)
-        if failure is None and dataset is not None and result is not None:
-            # With a dataset file the returned items follow the pushed ones; `result` stays empty.
-            if entry.output_kind == "dataset":
-                for item in result["items"]:
-                    dataset.append(dumps_json(item))
-                result = None
+        if failure is None:
+            result = _spill_to_dataset(entry, dataset, result)
     except (Exception, SystemExit) as exc:
         # ScriptError stays typed; anything else raised by script code or its validators and
         # serializers is a script_error.
@@ -296,7 +302,8 @@ def _run_script(opts: RunOptions, dataset: DatasetFile | None) -> tuple[dict[str
 def run(opts: RunOptions) -> int:
     """Run the script; returns the process exit code.
 
-    SIGTERM ends the script with a `cancelled` envelope (exit 1); pushed dataset lines stay.
+    SIGTERM ends the run with a `cancelled` envelope (exit 1), whatever the script does after
+    the signal; the dataset file keeps its complete lines.
     """
     cancellation = _Cancellation()
     cancellation.install()
@@ -307,8 +314,11 @@ def run(opts: RunOptions) -> int:
             envelope, code = _run_script(opts, dataset)
             cancellation.disarm()
         except _Cancelled:
+            pass
+        if cancellation.requested:
             envelope, code = _failure("cancelled", CANCELLED_MESSAGE), EXIT_FAILED
         if dataset is not None:
+            dataset.finalise()
             envelope["dataset"] = dataset.stats()
         _write_envelope(opts.result_file, envelope)
         return code

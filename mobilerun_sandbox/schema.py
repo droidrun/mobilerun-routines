@@ -88,7 +88,8 @@ def dataset_key(schema: dict[str, Any]) -> str:
     """Name of the one item field marked with `key_field` in the schema of a `Dataset[Item]`.
 
     The name is the serialization name, as it appears in the dataset lines. Raises
-    `SchemaError` without exactly one key or when its JSON type is not string or integer.
+    `SchemaError` without exactly one key or when the key does not serialise to a JSON string or
+    integer (so a `UUID` is fine and a `float` is not).
     """
     items = schema.get("properties", {}).get("items", {}).get("items", {})
     properties = items.get("properties", {}) if isinstance(items, dict) else {}
@@ -98,7 +99,7 @@ def dataset_key(schema: dict[str, Any]) -> str:
     if len(keys) > 1:
         raise SchemaError(f"dataset items have more than one key: {', '.join(keys)}")
     if properties[keys[0]].get("type") not in ("string", "integer"):
-        raise SchemaError(f"the key field '{keys[0]}' must be a string or an integer")
+        raise SchemaError(f"the key field '{keys[0]}' must serialise to a string or an integer")
     return keys[0]
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
 from datetime import datetime
@@ -56,18 +57,20 @@ def _parser() -> argparse.ArgumentParser:
 
 def _inspect(path: str) -> int:
     try:
-        entry = load_script(path)
-        output = output_schema(entry.output_model) if entry.output_model else None
-        document = {
-            "ok": True,
-            "entrypoint": entry.name,
-            "async": entry.is_async,
-            "inputSchema": input_schema(entry.input_model),
-            "outputSchema": output,
-            "outputKind": entry.output_kind,
-            "datasetKey": dataset_key(output) if entry.output_kind == "dataset" else None,
-            "sdkVersion": SDK_VERSION,
-        }
+        # The script runs at import: what it prints must not end up in the JSON on stdout.
+        with contextlib.redirect_stdout(sys.stderr):
+            entry = load_script(path)
+            output = output_schema(entry.output_model) if entry.output_model else None
+            document = {
+                "ok": True,
+                "entrypoint": entry.name,
+                "async": entry.is_async,
+                "inputSchema": input_schema(entry.input_model),
+                "outputSchema": output,
+                "outputKind": entry.output_kind,
+                "datasetKey": dataset_key(output) if entry.output_kind == "dataset" else None,
+                "sdkVersion": SDK_VERSION,
+            }
     except OSError as exc:
         return _reject("import_failed", f"cannot read script: {exc}")
     except NoEntryPointError as exc:
