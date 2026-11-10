@@ -7,7 +7,7 @@ import types
 from pathlib import Path
 
 from .entry import EntryPoint, take
-from .errors import EntryPointError
+from .errors import EntryPointError, NoEntryPointError
 
 MODULE_NAME = "mobilerun_user_script"
 
@@ -44,5 +44,5 @@ def load_script(path: str | Path) -> EntryPoint:
         raise ScriptImportError(exc) from exc
     entry = take(MODULE_NAME)
     if entry is None:
-        raise EntryPointError("no entry point: mark one function with @script")
+        raise NoEntryPointError("no entry point: mark one function with @script")
     return entry

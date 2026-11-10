@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mobilerun-sandbox"
-version = "0.1.0"
+version = "0.2.0"
 description = "Script interface for Mobilerun sandbox scripts: typed entry point, Context, inspect and run."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
-dependencies = ["pydantic>=2"]
+dependencies = ["pydantic>=2.11"]
 
 [dependency-groups]
 dev = ["pytest", "ruff"]
