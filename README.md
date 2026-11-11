@@ -152,5 +152,26 @@ false}}` (plus the `dataset` counts when a dataset file is in use) and exits 1. 
 pushed stay on disk; the file only ever holds complete lines, also after an interrupted write.
 `push` is safe to call from several threads. The package has no timeout, deadline or retry logic; the platform owns those.
 
-`device()`, `credentials`, `files` and `llm` on `Context` raise `NotAvailableError` in this
-version. Develop with `uv sync && uv run ruff check && uv run pytest`.
+## Control the device
+
+A run started with a device gives the script `ctx.device()`. It is synchronous and returns the
+`mobilerun-core` device of the run, connected once and reused on every call:
+
+```python
+@script
+def main(input: Input, ctx: Context) -> None:
+    device = ctx.device()
+    path = device.screenshot()  # path of a temporary image file
+    ui = device.ui()  # UI tree; `ui.nodes` lists the elements
+    device.tap(540, 1200)
+    device.type("hello")
+    device.start_app("com.android.settings")
+```
+
+The device is the unchanged `mobilerun_core.Device`; see that package for all its methods. It is
+an optional dependency: install `mobilerun-sandbox[device]`. A run without a device, without
+`mobilerun-core`, or without the platform's environment raises `NotAvailableError`; scripts
+never build a client or read the environment. The platform handles the credentials.
+
+`credentials`, `files` and `llm` on `Context` raise `NotAvailableError` in this version.
+Develop with `uv sync && uv run ruff check && uv run pytest`.
