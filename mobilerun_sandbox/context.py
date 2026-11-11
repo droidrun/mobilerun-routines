@@ -13,6 +13,7 @@ from pydantic import BaseModel, StrictInt, TypeAdapter
 
 from ._io import atomic_write_text, dumps_json
 from .dataset import DatasetSink
+from .device import connect_device
 from .errors import NotAvailableError
 
 RESULT_MAX_BYTES = 524288
@@ -124,6 +125,7 @@ class Context:
         self.state = state if state is not None else State()
         self.dataset = dataset if dataset is not None else DatasetSink()
         self._partial_reason: str | None = None
+        self._device: Any = None
 
     def partial(self, reason: str) -> None:
         """Mark the run as partial; the entry point still returns its result."""
@@ -136,7 +138,10 @@ class Context:
         return self._partial_reason
 
     def device(self) -> Any:
-        raise NotAvailableError("device")
+        """The run's `mobilerun_core` device (connected once, then reused)."""
+        if self._device is None:
+            self._device = connect_device(self.run.device_id)
+        return self._device
 
     @property
     def credentials(self) -> Any:
