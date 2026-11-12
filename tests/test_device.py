@@ -8,7 +8,7 @@ import pytest
 
 from mobilerun_sandbox import Context, NotAvailableError
 from mobilerun_sandbox.context import RunInfo
-from mobilerun_sandbox.device import API_BASE_URL_ENV, API_KEY_ENV
+from mobilerun_sandbox.device import API_BASE_URL_ENV, API_KEY_ENV, LEGACY_API_KEY_ENV
 
 SECRET = "sk-placeholder-secret-value"
 BASE_URL = "https://api.example.test"
@@ -44,6 +44,7 @@ def fake_core(monkeypatch: pytest.MonkeyPatch) -> FakeCore:
     monkeypatch.setitem(sys.modules, "mobilerun_core", core.module)
     monkeypatch.setenv(API_BASE_URL_ENV, BASE_URL)
     monkeypatch.setenv(API_KEY_ENV, SECRET)
+    monkeypatch.delenv(LEGACY_API_KEY_ENV, raising=False)
     return core
 
 
@@ -67,6 +68,37 @@ def test_missing_env_names_the_variable(
     assert missing in str(info.value)
     assert SECRET not in str(info.value)
     assert fake_core.connects == []
+
+
+def test_new_key_name_wins_over_the_legacy_one(
+    fake_core: FakeCore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(LEGACY_API_KEY_ENV, "legacy-value")
+    make_ctx().device()
+    assert fake_core.clients == [{"bearer": SECRET, "base_url": BASE_URL}]
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_legacy_key_name_alone_works(
+    fake_core: FakeCore, monkeypatch: pytest.MonkeyPatch, empty: bool
+) -> None:
+    if empty:
+        monkeypatch.setenv(API_KEY_ENV, "")
+    else:
+        monkeypatch.delenv(API_KEY_ENV)
+    monkeypatch.setenv(LEGACY_API_KEY_ENV, "legacy-value")
+    make_ctx().device()
+    assert fake_core.clients == [{"bearer": "legacy-value", "base_url": BASE_URL}]
+
+
+def test_no_key_names_the_new_variable_and_never_the_value(
+    fake_core: FakeCore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(API_KEY_ENV)
+    with pytest.raises(NotAvailableError) as info:
+        make_ctx().device()
+    assert "MOBILERUN_API_KEY" in str(info.value)
+    assert SECRET not in str(info.value)
 
 
 def test_missing_library(monkeypatch: pytest.MonkeyPatch) -> None:
