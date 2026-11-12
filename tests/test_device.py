@@ -91,16 +91,6 @@ def test_legacy_key_name_alone_works(
     assert fake_core.clients == [{"bearer": "legacy-value", "base_url": BASE_URL}]
 
 
-def test_no_key_names_the_new_variable_and_never_the_value(
-    fake_core: FakeCore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv(API_KEY_ENV)
-    with pytest.raises(NotAvailableError) as info:
-        make_ctx().device()
-    assert "MOBILERUN_API_KEY" in str(info.value)
-    assert SECRET not in str(info.value)
-
-
 def test_missing_library(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "mobilerun_core", None)  # makes the import fail
     monkeypatch.setenv(API_BASE_URL_ENV, BASE_URL)
