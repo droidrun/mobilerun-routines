@@ -1,4 +1,4 @@
-"""Command line: `python -m mobilerun_sandbox new|inspect|run`."""
+"""Command line: `python -m mobilerun_routines new|inspect|run`."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = _Parser(prog="python -m mobilerun_sandbox")
+    parser = _Parser(prog="python -m mobilerun_routines")
     sub = parser.add_subparsers(dest="command", required=True, parser_class=_Parser)
 
     new_p = sub.add_parser("new", help="write a starter script")

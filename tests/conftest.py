@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 
-from mobilerun_sandbox import cli
-from mobilerun_sandbox.entry import reset
+from mobilerun_routines import cli
+from mobilerun_routines.entry import reset
 
 
 @pytest.fixture(autouse=True)

@@ -1,8 +1,8 @@
-"""The starter script `python -m mobilerun_sandbox new` writes."""
+"""The starter script `python -m mobilerun_routines new` writes."""
 
 STARTER_SCRIPT = '''\
 from pydantic import BaseModel
-from mobilerun_sandbox import Context, script
+from mobilerun_routines import Context, script
 
 
 class Input(BaseModel):

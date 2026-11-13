@@ -2,8 +2,8 @@
 
 import json
 
-from mobilerun_sandbox import cli
-from mobilerun_sandbox.runner import EXIT_OK, EXIT_RUNNER_FAULT
+from mobilerun_routines import cli
+from mobilerun_routines.runner import EXIT_OK, EXIT_RUNNER_FAULT
 
 
 def test_new_writes_a_script_that_inspect_accepts(tmp_path, capsys):

@@ -1,4 +1,4 @@
-"""Script interface for Mobilerun sandbox scripts."""
+"""Script interface for Mobilerun routine scripts."""
 
 from .context import RESULT_MAX_BYTES, STATE_MAX_BYTES, Context, Log, RunInfo
 from .dataset import DATASET_MAX_BYTES, Dataset, key_field

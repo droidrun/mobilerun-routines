@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
-from mobilerun_sandbox import Context, NotAvailableError
-from mobilerun_sandbox.context import RunInfo
-from mobilerun_sandbox.device import API_BASE_URL_ENV, API_KEY_ENV, LEGACY_API_KEY_ENV
+from mobilerun_routines import Context, NotAvailableError
+from mobilerun_routines.context import RunInfo
+from mobilerun_routines.device import API_BASE_URL_ENV, API_KEY_ENV, LEGACY_API_KEY_ENV
 
 SECRET = "sk-placeholder-secret-value"
 BASE_URL = "https://api.example.test"

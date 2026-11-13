@@ -10,7 +10,7 @@ from enum import Enum
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_serializer, field_validator
-from mobilerun_sandbox import (
+from mobilerun_routines import (
     RESULT_MAX_BYTES, STATE_MAX_BYTES, Context, Dataset, NotAvailableError, ScriptError, script,
 )
 """

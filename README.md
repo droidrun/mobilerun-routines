@@ -1,6 +1,6 @@
-# mobilerun-sandbox
+# mobilerun-routines
 
-Python package for writing Mobilerun sandbox scripts. A script has one typed entry point that
+Python package for writing Mobilerun routine scripts. A script has one typed entry point that
 receives a validated input model and a `Context` with what the platform provides, and returns
 an output model. The package also ships the `inspect` and `run` commands the platform uses to
 read a script's schema and to execute it.
@@ -11,10 +11,10 @@ which needs `by_name` validation from pydantic 2.11).
 ## Install
 
 ```sh
-pip install mobilerun-sandbox
+pip install mobilerun-routines
 ```
 
-Python 3.11, 3.12 or 3.13. For device control add the extra: `pip install "mobilerun-sandbox[device]"`.
+Python 3.11, 3.12 or 3.13. For device control add the extra: `pip install "mobilerun-routines[device]"`.
 
 ## Sample script
 
@@ -22,7 +22,7 @@ Python 3.11, 3.12 or 3.13. For device control add the extra: `pip install "mobil
 from datetime import date
 
 from pydantic import BaseModel, Field
-from mobilerun_sandbox import Context, Dataset, ScriptError, key_field, script
+from mobilerun_routines import Context, Dataset, ScriptError, key_field, script
 
 
 class Input(BaseModel):
@@ -61,13 +61,13 @@ partial result, and use `ctx.state` to carry data to the next run.
 
 ```sh
 # write a starter script (fails if the file exists; the directory must exist)
-python -m mobilerun_sandbox new hello.py
+python -m mobilerun_routines new hello.py
 
 # print the entry point and the input/output JSON Schema (exit 3 if there is no valid entry point)
-python -m mobilerun_sandbox inspect script.py
+python -m mobilerun_routines inspect script.py
 
 # validate input, call the entry point, write one result envelope
-python -m mobilerun_sandbox run script.py --input-file in.json --result-file out.json \
+python -m mobilerun_routines run script.py --input-file in.json --result-file out.json \
     [--state-file state.json] [--dataset-file dataset.jsonl]
 ```
 
@@ -186,7 +186,7 @@ def main(input: Input, ctx: Context) -> None:
 ```
 
 The device is the unchanged `mobilerun_core.Device`; see that package for all its methods. It is
-an optional dependency: install `mobilerun-sandbox[device]`. A run without a device, without
+an optional dependency: install `mobilerun-routines[device]`. A run without a device, without
 `mobilerun-core`, or without the platform's environment raises `NotAvailableError`; scripts
 never build a client or read the environment. The platform handles the credentials.
 

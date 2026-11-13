@@ -7,14 +7,14 @@ from pathlib import Path
 import pytest
 from script_source import GREETER, script_source
 
-from mobilerun_sandbox import (
+from mobilerun_routines import (
     ERROR_MESSAGE_MAX_CHARS,
     RESULT_MAX_BYTES,
     STATE_MAX_BYTES,
     cli,
 )
-from mobilerun_sandbox._io import atomic_write_text
-from mobilerun_sandbox._version import SDK_VERSION
+from mobilerun_routines._io import atomic_write_text
+from mobilerun_routines._version import SDK_VERSION
 
 
 def test_success(run_script):
@@ -561,7 +561,7 @@ def test_module_invocation_in_a_subprocess(write_script, tmp_path):
     script = write_script(GREETER)
     inp, out = tmp_path / "in.json", tmp_path / "out.json"
     inp.write_text('{"name": "proc"}')
-    base = [sys.executable, "-m", "mobilerun_sandbox"]
+    base = [sys.executable, "-m", "mobilerun_routines"]
     inspected = subprocess.run([*base, "inspect", str(script)], capture_output=True, text=True)
     assert inspected.returncode == 0
     assert json.loads(inspected.stdout)["entrypoint"] == "main"

@@ -1,8 +1,8 @@
 import pytest
 from pydantic import BaseModel
 
-from mobilerun_sandbox import Context, EntryPointError, script
-from mobilerun_sandbox.entry import take
+from mobilerun_routines import Context, EntryPointError, script
+from mobilerun_routines.entry import take
 
 
 class In(BaseModel):

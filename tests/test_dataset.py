@@ -11,10 +11,10 @@ import pytest
 from pydantic import ValidationError
 from script_source import script_source
 
-from mobilerun_sandbox import DATASET_MAX_BYTES, Dataset
+from mobilerun_routines import DATASET_MAX_BYTES, Dataset
 
 MODELS = """
-from mobilerun_sandbox import DATASET_MAX_BYTES, DatasetTooLargeError, key_field
+from mobilerun_routines import DATASET_MAX_BYTES, DatasetTooLargeError, key_field
 
 class In(BaseModel):
     n: int = 2
@@ -267,7 +267,7 @@ def _spawn(script: Path, tmp_path: Path, *, dataset: bool) -> tuple[subprocess.P
     ready, result = tmp_path / "ready", tmp_path / "out.json"
     (tmp_path / "in.json").write_text(json.dumps({"ready": str(ready)}))
     argv = [
-        sys.executable, "-m", "mobilerun_sandbox", "run", str(script),
+        sys.executable, "-m", "mobilerun_routines", "run", str(script),
         "--input-file", str(tmp_path / "in.json"), "--result-file", str(result),
     ]  # fmt: skip
     dataset_path = tmp_path / "dataset.jsonl"
@@ -346,7 +346,7 @@ def test_the_sigterm_handler_is_restored_after_an_in_process_run(run_script):
 # Fix round 1: pushed items, interrupted and concurrent appends, cancellation wins
 
 OVERLAP_MODELS = """
-from mobilerun_sandbox import key_field
+from mobilerun_routines import key_field
 
 class In(BaseModel):
     pass
@@ -357,7 +357,7 @@ class Item(BaseModel):
 """
 
 COMPUTED_MODELS = """
-from mobilerun_sandbox import key_field
+from mobilerun_routines import key_field
 from pydantic import ConfigDict, computed_field
 
 class In(BaseModel):
@@ -412,7 +412,7 @@ class _Interrupting:
 
 
 def test_an_interrupted_append_leaves_only_complete_lines(tmp_path):
-    from mobilerun_sandbox.dataset import DatasetFile
+    from mobilerun_routines.dataset import DatasetFile
 
     df = DatasetFile(tmp_path / "d.jsonl")
     df.append('{"id":"a"}')
@@ -432,8 +432,8 @@ def test_an_interrupted_append_leaves_only_complete_lines(tmp_path):
 def test_concurrent_appends_cannot_exceed_the_limit(tmp_path):
     import threading
 
-    from mobilerun_sandbox import DatasetTooLargeError
-    from mobilerun_sandbox.dataset import DatasetFile
+    from mobilerun_routines import DatasetTooLargeError
+    from mobilerun_routines.dataset import DatasetFile
 
     df = DatasetFile(tmp_path / "d.jsonl")
     df._fh = _Interrupting(df._fh, delay=0.2)
