@@ -188,7 +188,9 @@ def main(input: Input, ctx: Context) -> None:
 The device is the unchanged `mobilerun_core.Device`; see that package for all its methods. It is
 an optional dependency: install `mobilerun-routines[device]`. A run without a device, without
 `mobilerun-core`, or without the platform's environment raises `NotAvailableError`; scripts
-never build a client or read the environment. The platform handles the credentials.
+never build a client or read the environment. The platform handles the credentials and sets the
+API base URL in `MOBILERUN_BASE_URL`; the older `MOBILERUN_API_BASE_URL` is still read when the
+new name is unset or empty.
 
 ### Run against a local device
 
