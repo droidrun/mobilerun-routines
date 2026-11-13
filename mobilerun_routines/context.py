@@ -18,7 +18,7 @@ from .errors import NotAvailableError
 
 RESULT_MAX_BYTES = 524288
 STATE_MAX_BYTES = 524288
-STATUS_FILE_ENV = "MOBILERUN_SANDBOX_STATUS_FILE"
+STATUS_FILE_ENV = "MOBILERUN_ROUTINES_STATUS_FILE"
 
 
 RunMode = Literal["live", "dry_run", "verification"]

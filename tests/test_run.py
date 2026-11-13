@@ -304,7 +304,7 @@ def test_run_info_defaults(run_script):
 
 def test_log_goes_to_stderr_and_status_to_file(run_script, tmp_path, monkeypatch):
     status = tmp_path / "status.txt"
-    monkeypatch.setenv("MOBILERUN_SANDBOX_STATUS_FILE", str(status))
+    monkeypatch.setenv("MOBILERUN_ROUTINES_STATUS_FILE", str(status))
     body = """
     ctx.log.info("one")
     ctx.log.warning("two\\nlines")
@@ -320,7 +320,7 @@ def test_log_goes_to_stderr_and_status_to_file(run_script, tmp_path, monkeypatch
 
 
 def test_status_without_env_is_a_noop(run_script, monkeypatch):
-    monkeypatch.delenv("MOBILERUN_SANDBOX_STATUS_FILE", raising=False)
+    monkeypatch.delenv("MOBILERUN_ROUTINES_STATUS_FILE", raising=False)
     r = run_script(script_source('ctx.log.status("nothing happens")', ret="None"))
     assert r.code == 0
 
