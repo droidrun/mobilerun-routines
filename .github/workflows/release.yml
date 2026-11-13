@@ -32,7 +32,7 @@ jobs:
             exit 1
           fi
           version=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
-          sdk_version=$(python3 -c 'import re; print(re.search(r"SDK_VERSION = \"([^\"]+)\"", open("mobilerun_sandbox/_version.py").read()).group(1))')
+          sdk_version=$(python3 -c 'import re; print(re.search(r"SDK_VERSION = \"([^\"]+)\"", open("mobilerun_routines/_version.py").read()).group(1))')
           if [ "$TAG" != "v$version" ]; then
             echo "tag $TAG does not match pyproject version v$version" >&2
             exit 1
@@ -52,8 +52,8 @@ jobs:
           [ "${#wheels[@]}" -eq 1 ] || { echo "expected exactly one wheel" >&2; exit 1; }
           unzip -Z1 "${wheels[0]}" | tee /dev/stderr | awk '
             /\.pth$/ || /sitecustomize/ { print "forbidden wheel path: " $0 > "/dev/stderr"; bad = 1; next }
-            /^mobilerun_sandbox\// { next }
-            /^mobilerun_sandbox-[^\/]*\.dist-info\// { next }
+            /^mobilerun_routines\// { next }
+            /^mobilerun_routines-[^\/]*\.dist-info\// { next }
             { print "unexpected wheel path: " $0 > "/dev/stderr"; bad = 1 }
             END { if (NR == 0) { print "empty wheel listing" > "/dev/stderr"; bad = 1 } exit bad }'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2

@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 
-from mobilerun_sandbox import (
+from mobilerun_routines import (
     RESERVED_ERROR_CODES,
 )
 
@@ -23,7 +23,7 @@ def test_readme_lists_exactly_the_reserved_codes():
 
 
 def test_the_readme_sample_is_a_valid_script(tmp_path, capsys):
-    from mobilerun_sandbox import cli
+    from mobilerun_routines import cli
 
     sample = re.search(r"```python\n(.*?)```", README, re.S)
     assert sample

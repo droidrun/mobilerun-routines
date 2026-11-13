@@ -119,7 +119,7 @@ wheels = [
 ]
 
 [[package]]
-name = "mobilerun-sandbox"
+name = "mobilerun-routines"
 version = "0.4.0"
 source = { editable = "." }
 dependencies = [

@@ -29,7 +29,7 @@ def connect_device(device_id: str | None) -> Any:
     except ImportError:
         raise _missing(
             "is not available: mobilerun-core is not installed "
-            "(install mobilerun-sandbox[device])"
+            "(install mobilerun-routines[device])"
         ) from None
     base_url = os.environ.get(API_BASE_URL_ENV)
     api_key = os.environ.get(API_KEY_ENV) or os.environ.get(LEGACY_API_KEY_ENV)

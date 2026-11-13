@@ -5,8 +5,8 @@ import pytest
 from pydantic import BaseModel
 from script_source import script_source
 
-from mobilerun_sandbox import cli, key_field
-from mobilerun_sandbox._version import SDK_VERSION
+from mobilerun_routines import cli, key_field
+from mobilerun_routines._version import SDK_VERSION
 
 SAMPLE = script_source(
     "return Out(greeting=input.name)",
@@ -66,7 +66,7 @@ def test_inspect_dataset_output_kind(inspect_source):
             sig="input: In",
             ret="Dataset[Item]",
             before="""
-            from mobilerun_sandbox import key_field
+            from mobilerun_routines import key_field
 
             class Item(BaseModel):
                 id: str = key_field()
@@ -293,7 +293,7 @@ def _dataset(item_fields: str, *, extra: str = "") -> str:
         sig="input: In",
         ret="Dataset[Item]",
         before=f"""
-        from mobilerun_sandbox import key_field
+        from mobilerun_routines import key_field
         {extra}
         class Item(BaseModel):
 {textwrap.indent(textwrap.dedent(item_fields), " " * 12)}
@@ -369,7 +369,7 @@ def test_a_key_on_a_non_dataset_output_is_ignored(inspect_source):
     source = script_source(
         "return Out(greeting='x')",
         models="""
-        from mobilerun_sandbox import key_field
+        from mobilerun_routines import key_field
 
         class In(BaseModel):
             pass
