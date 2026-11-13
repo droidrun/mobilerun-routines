@@ -27,7 +27,7 @@ class FakeCore:
         core = self
 
         class Mobilerun:
-            def __init__(self, *, bearer: str, base_url: str) -> None:
+            def __init__(self, *, bearer: str | None = None, base_url: str | None = None) -> None:
                 core.clients.append({"bearer": bearer, "base_url": base_url})
 
             def connect(self, device_id: str, **kwargs: Any) -> object:
@@ -132,3 +132,115 @@ def test_other_members_still_unavailable() -> None:
     for name in ("credentials", "files", "llm"):
         with pytest.raises(NotAvailableError):
             getattr(ctx, name)
+
+
+def local_ctx(device_id: str | None = None, **kw: Any) -> Context:
+    run = RunInfo(
+        run_id="r", attempt=1, deadline=None, mode="live", device_id=device_id,
+        device_target="local", **kw,
+    )  # fmt: skip
+    return Context(run)
+
+
+def test_local_adb_serial_has_no_bearer(fake_core: FakeCore) -> None:
+    device = local_ctx("emulator-5554").device()
+    assert device is fake_core.device
+    assert fake_core.clients == [{"bearer": None, "base_url": None}]
+    assert fake_core.connects == [
+        ("emulator-5554", {"platform": None, "url": None, "cloud": False})
+    ]
+
+
+def test_local_needs_no_cloud_env(fake_core: FakeCore, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(API_BASE_URL_ENV)
+    monkeypatch.delenv(API_KEY_ENV)
+    local_ctx("emulator-5554").device()
+    assert len(fake_core.connects) == 1
+
+
+def test_local_ios_url(fake_core: FakeCore) -> None:
+    local_ctx(None, device_platform="ios", device_url="http://10.0.0.5:6643").device()
+    assert fake_core.connects == [
+        (None, {"platform": "ios", "url": "http://10.0.0.5:6643", "cloud": None})
+    ]
+
+
+def test_local_without_device_or_url(fake_core: FakeCore) -> None:
+    with pytest.raises(NotAvailableError, match="no device"):
+        local_ctx(None, device_platform="ios").device()
+    assert fake_core.connects == []
+
+
+def test_local_core_value_error_is_one_line(fake_core: FakeCore) -> None:
+    def boom(self: Any, device_id: str | None, **kwargs: Any) -> object:
+        raise ValueError("local-android-http connect requires\nurl=...")
+
+    fake_core.module.Mobilerun.connect = boom  # type: ignore[attr-defined]
+    with pytest.raises(NotAvailableError) as info:
+        local_ctx("x").device()
+    assert "\n" not in str(info.value)
+    assert "requires url=..." in str(info.value)
+
+
+@pytest.mark.parametrize(
+    "exc", [ImportError("x"), NotImplementedError("mobilerun-core-local is not installed")]
+)
+def test_local_backend_missing_names_extra(fake_core: FakeCore, exc: Exception) -> None:
+    def boom(self: Any, device_id: str | None, **kwargs: Any) -> object:
+        raise exc
+
+    fake_core.module.Mobilerun.connect = boom  # type: ignore[attr-defined]
+    with pytest.raises(NotAvailableError, match=r"mobilerun-routines\[local\]"):
+        local_ctx("x").device()
+
+
+def test_local_core_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "mobilerun_core", None)
+    with pytest.raises(NotAvailableError, match=r"mobilerun-routines\[local\]"):
+        local_ctx("x").device()
+
+
+def run_cli(tmp_path: Any, monkeypatch: pytest.MonkeyPatch, *extra: str) -> str:
+    import json
+
+    from mobilerun_routines.cli import main
+
+    script = tmp_path / "s.py"
+    script.write_text(
+        "from pydantic import BaseModel\n"
+        "from mobilerun_routines import script, Context\n"
+        "class In(BaseModel):\n"
+        "    pass\n"
+        "@script\n"
+        "def main(input: In, ctx: Context) -> None:\n"
+        "    ctx.device()\n"
+    )
+    (tmp_path / "in.json").write_text("{}")
+    result = tmp_path / "out.json"
+    code = main(
+        ["run", str(script), "--input-file", str(tmp_path / "in.json"),
+         "--result-file", str(result), *extra]
+    )  # fmt: skip
+    assert code in (0, 1)
+    return result.read_text() if result.exists() else json.dumps({})
+
+
+def test_executor_argv_is_the_cloud_call(
+    fake_core: FakeCore, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = run_cli(tmp_path, monkeypatch, "--device-id", "11111111-2222-3333-4444-555555555555")
+    assert fake_core.clients == [{"bearer": SECRET, "base_url": BASE_URL}]
+    assert fake_core.connects == [("11111111-2222-3333-4444-555555555555", {"cloud": True})]
+    assert SECRET not in out
+
+
+def test_cli_local_flags_and_no_secret_in_result(
+    fake_core: FakeCore, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MOBILERUN_ANDROID_PORTAL_TOKEN", "portal-secret")
+    out = run_cli(
+        tmp_path, monkeypatch, "--device-target", "local", "--device-platform", "ios",
+        "--device-url", "http://h:1",
+    )  # fmt: skip
+    assert fake_core.connects == [(None, {"platform": "ios", "url": "http://h:1", "cloud": None})]
+    assert "portal-secret" not in out and SECRET not in out

@@ -16,12 +16,56 @@ API_KEY_ENV = "MOBILERUN_API_KEY"
 LEGACY_API_KEY_ENV = "MOBILERUN_CLOUD_API_KEY"
 
 
+_LOCAL_HINT = (
+    "is not available: the local device backend is not installed "
+    "(install mobilerun-routines[local])"
+)
+
+
 def _missing(reason: str) -> NotAvailableError:
     return NotAvailableError("device", reason)
 
 
-def connect_device(device_id: str | None) -> Any:
-    """Connect to `device_id` and return the `mobilerun_core` device unchanged."""
+def connect_device(
+    device_id: str | None,
+    *,
+    target: str = "cloud",
+    platform: str | None = None,
+    url: str | None = None,
+) -> Any:
+    """Connect to the run's device and return the `mobilerun_core` device unchanged."""
+    if target == "local":
+        return _connect_local(device_id, platform, url)
+    return _connect_cloud(device_id)
+
+
+def _one_line(msg: object) -> str:
+    return " ".join(str(msg).split())
+
+
+def _connect_local(device_id: str | None, platform: str | None, url: str | None) -> Any:
+    if not device_id and not url:
+        raise _missing("is not available: this run has no device")
+    try:
+        core = importlib.import_module("mobilerun_core")
+    except ImportError:
+        raise _missing(_LOCAL_HINT) from None
+    # Core's `cloud=False` always selects ADB and ignores platform/url, so it is only passed
+    # for a plain serial. With a platform or URL, core picks the Portal HTTP backend itself.
+    cloud = None if (platform or url) else False
+    try:
+        # No bearer: local devices need no cloud credential. Portal tokens come from core's env.
+        client = core.Mobilerun()
+        return client.connect(device_id, platform=platform, url=url, cloud=cloud)
+    except ValueError as exc:
+        raise _missing(f"is not available: {_one_line(exc)}") from None
+    except (ImportError, NotImplementedError) as exc:
+        if "mobilerun-core-local" in str(exc) or isinstance(exc, ImportError):
+            raise _missing(_LOCAL_HINT) from None
+        raise
+
+
+def _connect_cloud(device_id: str | None) -> Any:
     if not device_id:
         raise _missing("is not available: this run has no device")
     try:

@@ -54,7 +54,19 @@ def _parser() -> argparse.ArgumentParser:
     run_p.add_argument("--run-id", default="local")
     run_p.add_argument("--attempt", type=int, default=1)
     run_p.add_argument("--mode", choices=MODES, default="live")
-    run_p.add_argument("--device-id")
+    run_p.add_argument("--device-id", help="cloud device UUID, or ADB serial with local target")
+    run_p.add_argument(
+        "--device-target",
+        choices=("local", "cloud"),
+        default="cloud",
+        help="where the device lives (default: cloud)",
+    )
+    run_p.add_argument(
+        "--device-platform",
+        choices=("android", "ios"),
+        help="local device platform; needed with --device-url",
+    )
+    run_p.add_argument("--device-url", help="Portal HTTP URL of a local device")
     run_p.add_argument("--deadline", type=datetime.fromisoformat)
     return parser
 
@@ -120,6 +132,9 @@ def _run(args: argparse.Namespace) -> int:
         deadline=args.deadline,
         mode=args.mode,
         device_id=args.device_id,
+        device_target=args.device_target,
+        device_platform=args.device_platform,
+        device_url=args.device_url,
     )
     opts = RunOptions(
         path=args.path,
