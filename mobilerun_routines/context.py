@@ -22,6 +22,8 @@ STATUS_FILE_ENV = "MOBILERUN_ROUTINES_STATUS_FILE"
 
 
 RunMode = Literal["live", "dry_run", "verification"]
+DeviceTarget = Literal["local", "cloud"]
+DevicePlatform = Literal["android", "ios"]
 _STRICT_INT = TypeAdapter(StrictInt)
 
 
@@ -32,6 +34,9 @@ class RunInfo:
     deadline: datetime | None
     mode: RunMode
     device_id: str | None
+    device_target: DeviceTarget = "cloud"
+    device_platform: DevicePlatform | None = None
+    device_url: str | None = None
 
 
 def _one_line(msg: object) -> str:
@@ -140,7 +145,12 @@ class Context:
     def device(self) -> Any:
         """The run's `mobilerun_core` device (connected once, then reused)."""
         if self._device is None:
-            self._device = connect_device(self.run.device_id)
+            self._device = connect_device(
+                self.run.device_id,
+                target=self.run.device_target,
+                platform=self.run.device_platform,
+                url=self.run.device_url,
+            )
         return self._device
 
     @property

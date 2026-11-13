@@ -190,5 +190,33 @@ an optional dependency: install `mobilerun-routines[device]`. A run without a de
 `mobilerun-core`, or without the platform's environment raises `NotAvailableError`; scripts
 never build a client or read the environment. The platform handles the credentials.
 
+### Run against a local device
+
+To test a script against your own emulator or phone, install the extra
+(`pip install "mobilerun-routines[local]"`) and pass the device to `run`:
+
+- `--device-target local|cloud`: where the device lives (default `cloud`, which is the platform's
+  behaviour and needs no flag).
+- `--device-platform android|ios`: the platform of a device reached by URL.
+- `--device-url URL`: the Portal HTTP URL of the device.
+
+```sh
+# Android over ADB: the device id is the serial from `adb devices`
+python -m mobilerun_routines run script.py --input-file in.json --result-file out.json \
+  --device-id emulator-5554 --device-target local
+
+# iOS through its Portal URL
+python -m mobilerun_routines run script.py --input-file in.json --result-file out.json \
+  --device-target local --device-platform ios --device-url http://192.168.1.20:6643
+```
+
+`--device-platform` defaults to `android`; with `--device-url` it uses the Android Portal over HTTP,
+without it ADB. `ios` always uses the iOS Portal. A local run never opens a cloud device.
+
+Portal tokens and URLs are read by `mobilerun-core` from its own environment variables
+(`MOBILERUN_ANDROID_PORTAL_TOKEN`, `MOBILERUN_IOS_PORTAL_TOKEN`, …); this package never reads or
+passes them. The Android Portal needs a token; the iOS one may run without it. A missing serial,
+URL or required token raises `NotAvailableError`.
+
 `credentials`, `files` and `llm` on `Context` raise `NotAvailableError` in this version.
 Develop with `uv sync && uv run ruff check && uv run pytest`.
