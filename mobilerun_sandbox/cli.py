@@ -1,4 +1,4 @@
-"""Command line: `python -m mobilerun_sandbox inspect|run`."""
+"""Command line: `python -m mobilerun_sandbox new|inspect|run`."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import sys
 from datetime import datetime
 from typing import NoReturn, get_args
 
+from ._template import STARTER_SCRIPT
 from ._version import SDK_VERSION
 from .context import RunInfo, RunMode
 from .errors import EntryPointError, NoEntryPointError
@@ -38,6 +39,9 @@ def _parser() -> argparse.ArgumentParser:
     parser = _Parser(prog="python -m mobilerun_sandbox")
     sub = parser.add_subparsers(dest="command", required=True, parser_class=_Parser)
 
+    new_p = sub.add_parser("new", help="write a starter script")
+    new_p.add_argument("path")
+
     inspect_p = sub.add_parser("inspect", help="print entry point and JSON Schemas")
     inspect_p.add_argument("path")
 
@@ -53,6 +57,21 @@ def _parser() -> argparse.ArgumentParser:
     run_p.add_argument("--device-id")
     run_p.add_argument("--deadline", type=datetime.fromisoformat)
     return parser
+
+
+def _new(path: str) -> int:
+    try:
+        # "x" never overwrites and creates no directories.
+        with open(path, "x", encoding="utf-8") as file:
+            file.write(STARTER_SCRIPT)
+    except FileExistsError:
+        sys.stderr.write(f"{path} already exists\n")
+        return EXIT_RUNNER_FAULT
+    except OSError as exc:
+        sys.stderr.write(f"cannot write {path}: {exc}\n")
+        return EXIT_RUNNER_FAULT
+    sys.stdout.write(path + "\n")
+    return EXIT_OK
 
 
 def _inspect(path: str) -> int:
@@ -122,6 +141,8 @@ def _run(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "new":
+        return _new(args.path)
     if args.command == "inspect":
         return _inspect(args.path)
     return _run(args)

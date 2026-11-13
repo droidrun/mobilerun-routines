@@ -8,6 +8,14 @@ read a script's schema and to execute it.
 Requires Python 3.11 to 3.13 and `pydantic>=2.11` (instances are re-validated by field name,
 which needs `by_name` validation from pydantic 2.11).
 
+## Install
+
+```sh
+pip install mobilerun-sandbox
+```
+
+Python 3.11, 3.12 or 3.13. For device control add the extra: `pip install "mobilerun-sandbox[device]"`.
+
 ## Sample script
 
 ```python
@@ -52,6 +60,9 @@ partial result, and use `ctx.state` to carry data to the next run.
 ## Commands
 
 ```sh
+# write a starter script (fails if the file exists; the directory must exist)
+python -m mobilerun_sandbox new hello.py
+
 # print the entry point and the input/output JSON Schema (exit 3 if there is no valid entry point)
 python -m mobilerun_sandbox inspect script.py
 
@@ -59,6 +70,12 @@ python -m mobilerun_sandbox inspect script.py
 python -m mobilerun_sandbox run script.py --input-file in.json --result-file out.json \
     [--state-file state.json] [--dataset-file dataset.jsonl]
 ```
+
+### `new`
+
+`new PATH` writes a short working script (an `Input` and an `Output` model and a `@script` entry
+point) to `PATH` and prints the path. It never overwrites: if `PATH` exists, or its directory is
+missing, it prints one line on stderr and exits 64. The starter passes `inspect` as written.
 
 ### `inspect`
 
