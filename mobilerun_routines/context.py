@@ -22,6 +22,8 @@ STATUS_FILE_ENV = "MOBILERUN_ROUTINES_STATUS_FILE"
 
 
 RunMode = Literal["live", "dry_run", "verification"]
+DeviceTarget = Literal["local", "cloud"]
+DevicePlatform = Literal["android", "ios"]
 _STRICT_INT = TypeAdapter(StrictInt)
 
 
@@ -32,8 +34,8 @@ class RunInfo:
     deadline: datetime | None
     mode: RunMode
     device_id: str | None
-    device_target: str = "cloud"
-    device_platform: str | None = None
+    device_target: DeviceTarget = "cloud"
+    device_platform: DevicePlatform | None = None
     device_url: str | None = None
 
 

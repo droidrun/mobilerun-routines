@@ -210,9 +210,13 @@ python -m mobilerun_routines run script.py --input-file in.json --result-file ou
   --device-target local --device-platform ios --device-url http://192.168.1.20:6643
 ```
 
-Portal tokens are read by `mobilerun-core` from `MOBILERUN_ANDROID_PORTAL_TOKEN` and
-`MOBILERUN_IOS_PORTAL_TOKEN`; this package never reads or passes them. A missing serial, URL or
-token raises `NotAvailableError`.
+`--device-platform` defaults to `android`; with `--device-url` it uses the Android Portal over HTTP,
+without it ADB. `ios` always uses the iOS Portal. A local run never opens a cloud device.
+
+Portal tokens and URLs are read by `mobilerun-core` from its own environment variables
+(`MOBILERUN_ANDROID_PORTAL_TOKEN`, `MOBILERUN_IOS_PORTAL_TOKEN`, …); this package never reads or
+passes them. The Android Portal needs a token; the iOS one may run without it. A missing serial,
+URL or required token raises `NotAvailableError`.
 
 `credentials`, `files` and `llm` on `Context` raise `NotAvailableError` in this version.
 Develop with `uv sync && uv run ruff check && uv run pytest`.

@@ -11,7 +11,7 @@ from typing import NoReturn, get_args
 
 from ._template import STARTER_SCRIPT
 from ._version import SDK_VERSION
-from .context import RunInfo, RunMode
+from .context import DevicePlatform, DeviceTarget, RunInfo, RunMode
 from .errors import EntryPointError, NoEntryPointError
 from .loader import ScriptImportError, load_script
 from .runner import (
@@ -25,6 +25,8 @@ from .runner import (
 from .schema import SchemaError, dataset_key, input_schema, output_schema
 
 MODES = get_args(RunMode)
+DEVICE_TARGETS = get_args(DeviceTarget)
+DEVICE_PLATFORMS = get_args(DevicePlatform)
 
 
 class _Parser(argparse.ArgumentParser):
@@ -57,13 +59,13 @@ def _parser() -> argparse.ArgumentParser:
     run_p.add_argument("--device-id", help="cloud device UUID, or ADB serial with local target")
     run_p.add_argument(
         "--device-target",
-        choices=("local", "cloud"),
+        choices=DEVICE_TARGETS,
         default="cloud",
         help="where the device lives (default: cloud)",
     )
     run_p.add_argument(
         "--device-platform",
-        choices=("android", "ios"),
+        choices=DEVICE_PLATFORMS,
         help="local device platform; needed with --device-url",
     )
     run_p.add_argument("--device-url", help="Portal HTTP URL of a local device")
@@ -155,7 +157,11 @@ def _run(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
+    if args.command == "run" and args.device_target != "local":
+        if args.device_platform or args.device_url:
+            parser.error("--device-platform and --device-url need --device-target local")
     if args.command == "new":
         return _new(args.path)
     if args.command == "inspect":
