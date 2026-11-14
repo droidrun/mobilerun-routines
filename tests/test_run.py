@@ -632,3 +632,39 @@ def test_no_entry_point_writes_no_envelope_at_all(run_script):
 def test_an_import_time_failure_has_no_input_field(run_script):
     r = run_script("raise RuntimeError('at import')\n")
     assert r.code == 1 and "input" not in r.envelope
+
+
+def test_a_huge_input_is_left_out_and_the_run_is_unchanged(run_script):
+    big = "x" * (800 * 1024)
+    r = run_script(script_source('return Out(greeting=input.name[:3])'), {"name": big})
+    assert r.code == 0 and without_input(r.envelope) == {
+        "ok": True,
+        "outcome": "succeeded",
+        "result": {"greeting": "xxx"},
+    }
+    assert "input" not in r.envelope
+
+
+def test_the_input_limit_is_64_kib_of_compact_json(run_script):
+    source = script_source('return Out(greeting="x")')
+    at_limit = run_script(source, {"name": "x" * (65536 - len('{"name":"","count":1,"extra":0}'))})
+    assert len(json.dumps(at_limit.envelope["input"], separators=(",", ":"))) == 65536
+    over = run_script(source, {"name": "x" * 65536})
+    assert over.code == 0 and "input" not in over.envelope
+
+
+def test_an_input_that_is_not_json_is_left_out_and_the_run_is_unchanged(run_script):
+    models = """
+    class In(BaseModel):
+        n: float
+
+    class Out(BaseModel):
+        n: float
+    """
+    source = script_source("return Out(n=1.0)", models=models, sig="input: In")
+    r = run_script(source, raw_input='{"n": 1e309}')
+    assert r.code == 0 and r.envelope == {
+        "ok": True,
+        "outcome": "succeeded",
+        "result": {"n": 1.0},
+    }

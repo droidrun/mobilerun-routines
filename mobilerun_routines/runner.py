@@ -13,7 +13,7 @@ import json
 import signal
 import sys
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -99,6 +99,9 @@ class RunOptions:
     run_info: RunInfo
     state_file: str | None = None
     dataset_file: str | None = None
+    # Set once the input validated, before the script runs (a script may change its input
+    # model): the `input` of the envelope. `None` when absent, too big or not valid JSON.
+    echoed_input: dict[str, Any] | None = field(default=None, init=False, repr=False)
 
 
 class _StateMeta(BaseModel):
@@ -246,6 +249,7 @@ def _execute(
                 f"input does not match the input schema ({exc.error_count()} error(s))",
                 details=validation_details(exc, entry.input_model),
             ), EXIT_INPUT_INVALID
+        opts.echoed_input = _echo_input(model_input)
         value = _call(entry, model_input, ctx)
         result, failure = _serialise_result(entry, value)
         if failure is None:
@@ -271,6 +275,24 @@ def _execute(
             return failure, EXIT_FAILED
         envelope["state"] = {"meta": {"schema": saved.schema}, "data": saved.data}
     return envelope, EXIT_OK
+
+
+# `input` is left out above this size (compact JSON), so it never crowds out the result.
+INPUT_ECHO_MAX_BYTES = 65536
+
+
+def _echo_input(model_input: BaseModel) -> dict[str, Any] | None:
+    """The `input` of the envelope, or `None` when it is too big or not valid JSON.
+
+    Never raises: the input is a courtesy and must not change how a run ends.
+    """
+    try:
+        value = model_input.model_dump(mode="json", by_alias=True)
+        if len(dumps_json(value).encode("utf-8")) > INPUT_ECHO_MAX_BYTES:
+            return None
+    except Exception:
+        return None
+    return value
 
 
 def _write_envelope(path: str, envelope: dict[str, Any]) -> None:
@@ -320,6 +342,8 @@ def run(opts: RunOptions) -> int:
         if dataset is not None:
             dataset.finalise()
             envelope["dataset"] = dataset.stats()
+        if opts.echoed_input is not None:
+            envelope["input"] = opts.echoed_input
         _write_envelope(opts.result_file, envelope)
         return code
     finally:
