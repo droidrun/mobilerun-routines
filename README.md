@@ -94,8 +94,8 @@ def main(input: Input, ctx: Context) -> Output:
 - **Time limit.** The platform sets it; the script does not.
 - **Starter.** `python -m mobilerun_routines new hello.py` writes a working script in this shape.
 
-`inspect` checks the file before it imports it (see below), so a script that is not set up this
-way gets every problem at once, each with a line number and a hint.
+When a script is not set up this way, `inspect` reports what is wrong with a line number and a
+repair hint (see below).
 
 ## Commands
 
@@ -127,19 +127,21 @@ serialization name of the item field marked with `key_field()` for a `Dataset[It
 The script runs when it is imported; what it prints goes to stderr, so stdout holds exactly the
 JSON document (output written straight to file descriptor 1 is not intercepted).
 
-**Checks before the import.** `inspect` first reads the file as Python source (a syntax tree; it
-does not run any code). If that finds problems it reports all of them and stops before the
-import. Each check has a code:
+**What `inspect` reports.** A script that imports and has a valid entry point is accepted; a
+script that does not compile is a `syntax_error`. When the import or the entry point fails,
+`inspect` also reads the source as Python syntax (it does not run any code) to explain the usual
+newcomer mistakes more precisely, with line numbers and every finding at once. Each issue has a
+code:
 
 <!-- inspect-codes:start -->
-- `syntax_error`: the file does not parse; the issue has the line.
+- `syntax_error`: the file does not compile; the issue has the line.
 - `import_wrong_module`: `script` (or `Context` from a `mobilerun*` module) is imported from a
   module other than `mobilerun_routines`, for example `from mobilerun import script`.
 - `import_missing`: a function is decorated with `@script` but `script` is not imported from
   `mobilerun_routines`.
 - `no_entry_point`: no function is marked with `@script`.
-- `entry_point_invalid`: two functions are marked with `@script`, or the signature does not fit
-  (found while importing).
+- `entry_point_invalid`: two functions are marked with `@script`, or the signature does not fit;
+  unresolved annotations such as a missing `Context` import get the repair hint.
 - `import_failed`: the script cannot be read or raises while it is imported. A `NameError` for
   `script` or `Context`, or a missing `mobilerun`, `mobilerun_sandbox` or `mobilerun_sdk` module,
   gets the same repair hint as the static checks.
@@ -187,6 +189,8 @@ defaults (`model_dump(mode="json", by_alias=True)` of the `Input` model, so a fi
 the input file shows its default, and keys are the names `inputSchema` lists). It is there
 whenever the input validated: also for a failed or cancelled run, never for `input_invalid` and
 never when there is no result file. It can contain the values the platform passed in.
+`input` is omitted when it is larger than 64 KiB or not representable as JSON; the run itself is
+not affected.
 
 Result keys are the serialization names of the output model (`serialization_alias`, or `alias`),
 exactly the property names `outputSchema` lists.

@@ -7,7 +7,7 @@ from pathlib import Path
 from mobilerun_routines import (
     RESERVED_ERROR_CODES,
 )
-from mobilerun_routines.errors import INSPECT_ERROR_CODES
+from mobilerun_routines._check import INSPECT_ERROR_CODES
 
 ROOT = Path(__file__).parent.parent
 README = (ROOT / "README.md").read_text()

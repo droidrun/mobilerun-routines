@@ -1,17 +1,34 @@
-"""Static checks of a script file, and the repair hints `inspect` reports.
+"""What `inspect` reports when a script fails: issues with codes, lines and repair hints.
 
-The checks read the script as a Python syntax tree and never execute it, so they can report every
-problem at once, with line numbers, before the script is imported.
+The loader decides whether a script is valid. When it rejects one, `explain` reads the source as
+a syntax tree (it never runs the code) to name the usual newcomer mistakes more precisely.
 """
 
 from __future__ import annotations
 
 import ast
-import warnings
 from dataclasses import dataclass
 from typing import Any
 
 PACKAGE = "mobilerun_routines"
+
+SYNTAX_ERROR = "syntax_error"
+IMPORT_WRONG_MODULE = "import_wrong_module"
+IMPORT_MISSING = "import_missing"
+NO_ENTRY_POINT = "no_entry_point"
+ENTRY_POINT_INVALID = "entry_point_invalid"
+IMPORT_FAILED = "import_failed"
+SCHEMA_UNSUPPORTED = "schema_unsupported"
+# Codes of the issues `inspect` reports (documented in the README).
+INSPECT_ERROR_CODES = (
+    SYNTAX_ERROR,
+    IMPORT_WRONG_MODULE,
+    IMPORT_MISSING,
+    NO_ENTRY_POINT,
+    ENTRY_POINT_INVALID,
+    IMPORT_FAILED,
+    SCHEMA_UNSUPPORTED,
+)
 
 # One hint for every "the script is not set up as a routine script" problem.
 SCRIPT_HINT = (
@@ -33,8 +50,11 @@ class Issue:
     line: int | None = None
     hint: str | None = None
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "message", " ".join(self.message.split()))
+
     def as_json(self) -> dict[str, Any]:
-        document: dict[str, Any] = {"code": self.code, "message": " ".join(self.message.split())}
+        document: dict[str, Any] = {"code": self.code, "message": self.message}
         if self.line is not None:
             document["line"] = self.line
         if self.hint is not None:
@@ -43,25 +63,52 @@ class Issue:
 
     def describe(self) -> str:
         """One line for stderr: `line N: message — hint`."""
-        text = " ".join(self.message.split())
-        if self.hint is not None:
-            text += f" — {self.hint}"
-        return f"line {self.line}: {text}" if self.line is not None else text
+        text = self.message if self.hint is None else f"{self.message} — {self.hint}"
+        return text if self.line is None else f"line {self.line}: {text}"
+
+
+def syntax_issue(exc: BaseException) -> Issue:
+    """The issue for a script that does not compile (`SyntaxError`, or `ValueError`)."""
+    line = exc.lineno if isinstance(exc, SyntaxError) else None
+    message = exc.msg if isinstance(exc, SyntaxError) else str(exc)
+    hint = None if line is None else f"Fix the syntax error on line {line}."
+    return Issue(SYNTAX_ERROR, f"syntax error: {message}", line, hint)
+
+
+def runtime_issue(
+    code: str, message: str, exc: BaseException, path: str, *, hint: bool = False
+) -> Issue:
+    """The issue for `exc`, raised while the script at `path` was imported.
+
+    It has the line of the script frame in the traceback, and the repair hint when `hint` is set
+    or `exc` is one of the usual setup mistakes.
+    """
+    use_hint = hint or is_setup_mistake(exc)
+    return Issue(code, message, _script_line(exc, path), SCRIPT_HINT if use_hint else None)
+
+
+def explain(failure: Issue, source: bytes | str, filename: str) -> list[Issue]:
+    """`failure` (what the loader reported) together with what the source shows.
+
+    A finding on the same line as `failure` explains it, so it takes its place.
+    """
+    try:
+        tree = ast.parse(source, filename)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return [failure]
+    found = sorted(_Scan(tree).run(), key=lambda issue: issue.line or 0)
+    if failure.line is not None and any(issue.line == failure.line for issue in found):
+        return found
+    return [failure, *found]
 
 
 class _Scan:
-    """What the script imports and where it marks entry points."""
+    """Imports of `script` from the wrong module, and `@script` without any binding."""
 
     def __init__(self, tree: ast.Module) -> None:
         self.tree = tree
         self.issues: list[Issue] = []
-        self.package_script: set[str] = set()  # local names of `mobilerun_routines.script`
-        self.package_modules: set[str] = set()  # local names of the `mobilerun_routines` module
-        self.mistaken_script: set[str] = set()  # `script` imported from the wrong module
-        self.own_script = False  # the script binds the name `script` itself
-        self.entry_lines: list[tuple[int, ast.expr]] = []
-        self._seen: set[int] = set()
-        self._missing_reported = False
+        self.script_bound = False  # something in the file binds the name `script`
 
     def run(self) -> list[Issue]:
         nodes = list(ast.walk(self.tree))
@@ -69,159 +116,68 @@ class _Scan:
             if isinstance(node, ast.ImportFrom):
                 self._from_import(node)
             elif isinstance(node, ast.Import):
-                self._import(node)
+                self.script_bound |= any(_local(a) == "script" for a in node.names)
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                self.own_script |= node.name == "script"
+                self.script_bound |= node.name == "script"
+            elif isinstance(node, ast.arg):
+                self.script_bound |= node.arg == "script"
             elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
-                self.own_script |= node.id == "script"
+                self.script_bound |= node.id == "script"
         for node in nodes:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                for decorator in node.decorator_list:
-                    call = isinstance(decorator, ast.Call)
-                    self._candidate(decorator.func if call else decorator)
-            elif isinstance(node, ast.Call):
-                self._candidate(node.func)
-        self._duplicates()
-        if not self.entry_lines:
-            self.issues.append(
-                Issue("no_entry_point", "no entry point: mark one function with @script",
-                      hint=SCRIPT_HINT)
-            )
-        self.issues.sort(key=lambda issue: (issue.line is None, issue.line or 0))
+                self._decorators(node)
         return self.issues
 
     def _from_import(self, node: ast.ImportFrom) -> None:
-        if node.level:  # a sibling file of the script; nothing to say about it
-            return
         module = node.module or ""
         root = module.split(".")[0]
         for alias in node.names:
-            local = alias.asname or alias.name
-            if root == PACKAGE:
-                if alias.name in ("script", "*"):
-                    self.package_script.add(local if alias.name == "script" else "script")
-                continue
-            mistaken = alias.name == "script" or (
-                alias.name == "Context" and root.startswith("mobilerun")
+            self.script_bound |= _local(alias) == "script" or (
+                alias.name == "*" and root == PACKAGE
             )
-            if alias.name == "script":
-                self.mistaken_script.add(local)
-            if mistaken:
+            if node.level or root == PACKAGE:  # a sibling file, or the right module
+                continue
+            if alias.name == "script" or (alias.name == "Context" and root.startswith("mobilerun")):
                 self.issues.append(
                     Issue(
-                        "import_wrong_module",
+                        IMPORT_WRONG_MODULE,
                         f"`{alias.name}` is not in `{module}`; it comes from `{PACKAGE}`",
                         node.lineno,
                         SCRIPT_HINT,
                     )
                 )
-            elif local == "script":
-                self.own_script = True
 
-    def _import(self, node: ast.Import) -> None:
-        for alias in node.names:
-            if alias.name.split(".")[0] == PACKAGE:
-                self.package_modules.add(alias.asname or PACKAGE)
-
-    def _candidate(self, target: ast.expr) -> None:
-        """Count `target` as an entry point marker if it names the `script` decorator."""
-        if id(target) in self._seen:
+    def _decorators(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        """Report the first `@script` (or `@script(...)`) that has nothing behind the name."""
+        if self.script_bound or any(i.code == IMPORT_MISSING for i in self.issues):
             return
-        self._seen.add(id(target))
-        if isinstance(target, ast.Name):
-            if target.id not in self.package_script and target.id not in self.mistaken_script:
-                if target.id != "script":
-                    return
-                if not self.own_script and not self._missing_reported:
-                    self._missing_reported = True
-                    self.issues.append(
-                        Issue(
-                            "import_missing",
-                            "`script` is used but never imported",
-                            target.lineno,
-                            SCRIPT_HINT,
-                        )
+        for decorator in node.decorator_list:
+            target = decorator.func if isinstance(decorator, ast.Call) else decorator
+            if isinstance(target, ast.Name) and target.id == "script":
+                self.issues.append(
+                    Issue(
+                        IMPORT_MISSING,
+                        "`script` is used but never imported",
+                        target.lineno,
+                        SCRIPT_HINT,
                     )
-        elif not (isinstance(target, ast.Attribute) and target.attr == "script"):
-            # `other.script` also counts as a marker; the import at run time decides if it works.
-            return
-        self.entry_lines.append((target.lineno, target))
-
-    def _duplicates(self) -> None:
-        """Two module-level functions marked with `@script`: the loader rejects the second."""
-        marked = {id(target) for _, target in self.entry_lines}
-        first: str | None = None
-        for node in self.tree.body:
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            lines = [
-                d.lineno
-                for d in node.decorator_list
-                if id(d.func if isinstance(d, ast.Call) else d) in marked
-            ]
-            if not lines:
-                continue
-            if first is None:
-                first = node.name
-                continue
-            self.issues.append(
-                Issue(
-                    "entry_point_invalid",
-                    f"duplicate entry point '{node.name}': '{first}' is already marked with "
-                    "@script (one per module)",
-                    lines[0],
-                    "Keep `@script` on exactly one function.",
                 )
-            )
+                return
 
 
-def check_source(source: bytes | str, filename: str) -> list[Issue]:
-    """Every static problem in `source`; empty when it passes. Never runs the code."""
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            tree = ast.parse(source, filename)
-            # The syntax tree alone misses errors such as `return` outside a function.
-            compile(tree, filename, "exec", dont_inherit=True)
-    except SyntaxError as exc:
-        return [_syntax_issue(exc.msg, exc.lineno)]
-    except (ValueError, RecursionError, MemoryError) as exc:
-        return [_syntax_issue(str(exc) or type(exc).__name__, None)]
-    return _Scan(tree).run()
+def _local(alias: ast.alias) -> str:
+    return alias.asname or alias.name.split(".")[0]
 
 
-def _syntax_issue(message: str, line: int | None) -> Issue:
-    hint = f"Fix the syntax error on line {line}." if line is not None else None
-    return Issue("syntax_error", f"syntax error: {message}", line, hint)
-
-
-def import_issue(exc: BaseException, path: str) -> Issue:
-    """The `import_failed` issue for `exc`, raised while the script at `path` was imported."""
-    return _runtime_issue("import_failed", f"{type(exc).__name__}: {exc}", exc, path)
-
-
-def entry_point_issue(exc: BaseException, path: str) -> Issue:
-    """The `entry_point_invalid` issue for an `EntryPointError` the script's decorator raised."""
-    return _runtime_issue("entry_point_invalid", str(exc), exc, path)
-
-
-def _runtime_issue(code: str, message: str, exc: BaseException, path: str) -> Issue:
-    line = _script_line(exc, path)
-    if line is None and isinstance(exc, SyntaxError):
-        line = exc.lineno
-    hint = SCRIPT_HINT if _is_setup_mistake(exc) else None
-    return Issue(code, message, line, hint)
-
-
-def _is_setup_mistake(exc: BaseException | None) -> bool:
+def is_setup_mistake(exc: BaseException | None) -> bool:
     """A missing `script`/`Context` name or an import of the wrong SDK module, at the exception
     or its cause (the loader reports unresolved annotations with the `NameError` as cause)."""
     while exc is not None:
-        if isinstance(exc, NameError) and exc.name in _SDK_NAMES:
+        name = getattr(exc, "name", None) or ""
+        if isinstance(exc, NameError) and name in _SDK_NAMES:
             return True
-        if isinstance(exc, ModuleNotFoundError):
-            if (exc.name or "").split(".")[0] in _WRONG_MODULES:
-                return True
+        if isinstance(exc, ModuleNotFoundError) and name.split(".")[0] in _WRONG_MODULES:
+            return True
         exc = exc.__cause__
     return False
 

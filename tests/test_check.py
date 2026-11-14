@@ -5,7 +5,7 @@ import textwrap
 
 import pytest
 
-from mobilerun_routines._check import SCRIPT_HINT, check_source
+from mobilerun_routines._check import SCRIPT_HINT
 
 MODELS = """\
 from pydantic import BaseModel
@@ -44,18 +44,17 @@ def _codes(doc) -> list[tuple[str, int | None]]:
     return [(e["code"], e.get("line")) for e in doc["errors"]]
 
 
-def test_the_hint_names_the_import_and_the_decorator():
-    assert "from mobilerun_routines import Context, script" in SCRIPT_HINT
-    assert "@script" in SCRIPT_HINT
-    assert "def main(input: Input, ctx: Context) -> Output:" in SCRIPT_HINT
-
-
 def test_a_script_without_a_decorator(inspect_source):
     source = _source(GOOD_IMPORT, MODELS, "def main(input: Input, ctx: Context) -> Output: ...")
     doc, err = _failure(inspect_source, source)
     assert _codes(doc) == [("no_entry_point", None)]
-    assert doc["error"]["repair"] == {"action": "fix_script", "hint": SCRIPT_HINT}
-    assert err == f"no entry point: mark one function with @script — {SCRIPT_HINT}\n"
+    # The hint text is the contract: the correct import and a one-line example.
+    hint = (
+        "Add `from mobilerun_routines import Context, script` and decorate one function: "
+        "`@script` `def main(input: Input, ctx: Context) -> Output:`"
+    )
+    assert doc["error"]["repair"] == {"action": "fix_script", "hint": hint}
+    assert err == f"no entry point: mark one function with @script — {hint}\n"
 
 
 def test_a_decorator_without_the_import(inspect_source):
@@ -93,15 +92,24 @@ def test_context_imported_from_the_wrong_module(inspect_source):
     assert _codes(doc) == [("import_wrong_module", 2)]
 
 
-def test_every_problem_is_reported_at_once_ordered_by_line(inspect_source):
-    source = _source("from mobilerun import script, Context", MODELS, "def main(): ...")
+def test_every_finding_is_reported_at_once_ordered_by_line(inspect_source):
+    source = _source("from mobilerun import script, Context", MODELS, "@script\n" + BODY)
     doc, err = _failure(inspect_source, source)
-    assert _codes(doc) == [("import_wrong_module", 1), ("import_wrong_module", 1),
-                           ("no_entry_point", None)]
-    assert err.count("\n") == 3
+    assert _codes(doc) == [("import_wrong_module", 1), ("import_wrong_module", 1)]
+    assert err.count("\n") == 2
 
 
-def test_syntax_error_has_a_line_and_stops_the_checks(inspect_source):
+def test_findings_on_other_lines_are_reported_with_the_one_that_explains_the_failure(
+    inspect_source,
+):
+    # The loader fails at line 1 (the wrong module); `script` is also never imported.
+    source = _source("from mobilerun_sdk import Context", MODELS, "@script\n" + BODY)
+    doc, _ = _failure(inspect_source, source)
+    decorator = source.splitlines().index("@script") + 1
+    assert _codes(doc) == [("import_wrong_module", 1), ("import_missing", decorator)]
+
+
+def test_syntax_error_has_a_line(inspect_source):
     source = _source(GOOD_IMPORT, "@script\ndef main(:\n    pass")
     doc, err = _failure(inspect_source, source)
     line = source.splitlines().index("def main(:") + 1
@@ -110,24 +118,18 @@ def test_syntax_error_has_a_line_and_stops_the_checks(inspect_source):
     assert err.startswith(f"line {line}: syntax error: ")
 
 
-def test_a_compile_stage_syntax_error_is_found_statically(inspect_source):
+def test_a_compile_stage_syntax_error_is_a_syntax_error(inspect_source):
     doc, _ = _failure(inspect_source, "return 1\n")
     assert _codes(doc) == [("syntax_error", 1)]
 
 
-def test_the_checks_never_run_the_script(inspect_source, tmp_path):
-    marker = tmp_path / "ran"
-    inspect_source(f"open({str(marker)!r}, 'w').close()\n")
-    assert not marker.exists()
-
-
-def test_a_duplicate_entry_point_is_reported_with_the_loader_message(inspect_source):
+def test_a_duplicate_entry_point_is_the_loaders_failure_with_the_line(inspect_source):
     source = _source(
         GOOD_IMPORT, MODELS, "@script\n" + BODY, "@script\ndef other(input: Input) -> None: ..."
     )
     doc, _ = _failure(inspect_source, source)
     line = source.splitlines().index("def other(input: Input) -> None: ...")
-    assert _codes(doc) == [("entry_point_invalid", line)]
+    assert _codes(doc) == [("entry_point_invalid", line)]  # the decorator line
     assert "duplicate entry point 'other': 'main'" in doc["error"]["message"]
 
 
@@ -148,6 +150,46 @@ def test_valid_imports_pass(inspect_source, header):
     assert json.loads(out)["warnings"] == []
 
 
+@pytest.mark.parametrize(
+    "header",
+    [
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from mobilerun import script\n"
+        "from mobilerun_routines import Context, script",
+        "from mobilerun_routines import Context, script\nentry = script",
+        "import functools\nfrom mobilerun_routines import Context, script\nother = functools",
+    ],
+    ids=["type-checking-import", "alias-assignment", "unrelated-attribute"],
+)
+def test_valid_patterns_the_loader_accepts_are_never_rejected(inspect_source, header):
+    decorator = "@entry" if "entry = script" in header else "@script"
+    source = _source(header, MODELS, f"{decorator}\n" + BODY)
+    code, _, err = inspect_source(source)
+    assert code == 0, err
+
+
+def test_an_unrelated_attribute_decorator_is_accepted(inspect_source):
+    source = _source(
+        "import functools\nfrom mobilerun_routines import Context, script",
+        MODELS,
+        "class Other:\n    script = staticmethod(lambda f: f)",
+        "@script\n" + BODY,
+        "@Other.script\ndef helper() -> None: ...",
+    )
+    code, _, err = inspect_source(source)
+    assert code == 0, err
+
+
+def test_a_name_script_bound_locally_is_not_import_missing(inspect_source):
+    source = _source(
+        MODELS,
+        "from mobilerun_routines import Context",
+        "def run(script):\n    return script\n\nfrom mobilerun_routines import script as marker",
+        "@marker\n" + BODY,
+    )
+    code, _, err = inspect_source(source)
+    assert code == 0, err
+
+
 def test_the_decorator_applied_as_a_call_is_an_entry_point(inspect_source):
     source = _source(GOOD_IMPORT, MODELS, BODY, "script(main)")
     code, _, err = inspect_source(source)
@@ -163,10 +205,6 @@ def test_the_starter_passes_with_no_warnings(tmp_path, capsys):
     assert cli.main(["inspect", str(path)]) == 0
     doc = json.loads(capsys.readouterr().out)
     assert doc["ok"] is True and doc["warnings"] == []
-
-
-def test_check_source_accepts_bytes_and_passes_a_good_script():
-    assert check_source(_source(GOOD_IMPORT, MODELS, "@script\n" + BODY).encode(), "x.py") == []
 
 
 # Runtime import failures that get the same hint

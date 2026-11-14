@@ -232,10 +232,8 @@ def _spill_to_dataset(
 
 
 def _execute(
-    entry: EntryPoint, opts: RunOptions, dataset: DatasetFile | None, seen: dict[str, Any]
+    entry: EntryPoint, opts: RunOptions, dataset: DatasetFile | None
 ) -> tuple[dict[str, Any], int]:
-    """Run the entry point. `seen["input"]` is set once the input validated, so the envelope
-    carries it even when the run is cut short later."""
     state = _read_state(opts.state_file)
     raw_input = _read_input(opts.input_file)
     ctx = Context(run=opts.run_info, state=state, dataset=DatasetSink(dataset, entry.item_type))
@@ -248,8 +246,6 @@ def _execute(
                 f"input does not match the input schema ({exc.error_count()} error(s))",
                 details=validation_details(exc, entry.input_model),
             ), EXIT_INPUT_INVALID
-        # What the script receives: defaults filled in, keys named as in `inputSchema`.
-        seen["input"] = model_input.model_dump(mode="json", by_alias=True)
         value = _call(entry, model_input, ctx)
         result, failure = _serialise_result(entry, value)
         if failure is None:
@@ -257,13 +253,13 @@ def _execute(
     except (Exception, SystemExit) as exc:
         # ScriptError stays typed; anything else raised by script code or its validators and
         # serializers is a script_error.
-        return {**_failure_from_exception(exc), **seen}, EXIT_FAILED
+        return _failure_from_exception(exc), EXIT_FAILED
     if failure is None:
         failure = _size_failure(result, RESULT_MAX_BYTES, "result_too_large", "result")
     if failure is not None:
-        return {**failure, **seen}, EXIT_FAILED
+        return failure, EXIT_FAILED
 
-    envelope: dict[str, Any] = {"ok": True, "outcome": "succeeded", **seen}
+    envelope: dict[str, Any] = {"ok": True, "outcome": "succeeded"}
     if ctx.partial_reason is not None:
         envelope["outcome"] = "partial"
         envelope["partialReason"] = ctx.partial_reason[:ERROR_MESSAGE_MAX_CHARS]
@@ -272,7 +268,7 @@ def _execute(
     if saved is not None:
         failure = _size_failure(saved.data, STATE_MAX_BYTES, "state_too_large", "state")
         if failure is not None:
-            return {**failure, **seen}, EXIT_FAILED
+            return failure, EXIT_FAILED
         envelope["state"] = {"meta": {"schema": saved.schema}, "data": saved.data}
     return envelope, EXIT_OK
 
@@ -293,16 +289,14 @@ def _open_dataset_file(path: str | None) -> DatasetFile | None:
         raise RunnerFault(f"cannot write dataset file: {exc}") from exc
 
 
-def _run_script(
-    opts: RunOptions, dataset: DatasetFile | None, seen: dict[str, Any]
-) -> tuple[dict[str, Any], int]:
+def _run_script(opts: RunOptions, dataset: DatasetFile | None) -> tuple[dict[str, Any], int]:
     try:
         entry = load_script(opts.path)
     except OSError as exc:
         raise RunnerFault(f"cannot read script: {exc}") from exc
     except ScriptImportError as exc:
         return _failure_from_exception(exc.original), EXIT_FAILED
-    return _execute(entry, opts, dataset, seen)
+    return _execute(entry, opts, dataset)
 
 
 def run(opts: RunOptions) -> int:
@@ -314,16 +308,15 @@ def run(opts: RunOptions) -> int:
     cancellation = _Cancellation()
     cancellation.install()
     dataset = None
-    seen: dict[str, Any] = {}
     try:
         dataset = _open_dataset_file(opts.dataset_file)
         try:
-            envelope, code = _run_script(opts, dataset, seen)
+            envelope, code = _run_script(opts, dataset)
             cancellation.disarm()
         except _Cancelled:
             pass
         if cancellation.requested:
-            envelope, code = {**_failure("cancelled", CANCELLED_MESSAGE), **seen}, EXIT_FAILED
+            envelope, code = _failure("cancelled", CANCELLED_MESSAGE), EXIT_FAILED
         if dataset is not None:
             dataset.finalise()
             envelope["dataset"] = dataset.stats()
