@@ -57,6 +57,46 @@ async def main(input: Input, ctx: Context) -> Dataset[Product] | None:
 `Dataset[Item]` for a list the platform can diff, call `ctx.partial("reason")` to mark a
 partial result, and use `ctx.state` to carry data to the next run.
 
+## Script format
+
+A script is one Python file with this shape:
+
+```python
+from pydantic import BaseModel
+from mobilerun_routines import Context, script
+
+
+class Input(BaseModel):
+    name: str = "world"  # defaults are allowed
+
+
+class Output(BaseModel):
+    message: str
+
+
+@script
+def main(input: Input, ctx: Context) -> Output:
+    ctx.log.info("greeting")  # a log line on stderr; `print(...)` works too
+    return Output(message=f"Hello, {input.name}!")
+```
+
+- **Import.** `script` and `Context` come from `mobilerun_routines`, nothing else
+  (`from mobilerun import script` does not exist).
+- **Entry point.** Mark exactly one function with the bare decorator `@script`. It may be `def`
+  or `async def`, takes `input` (a pydantic model) and, optionally, `ctx: Context`.
+- **Input.** The `Input` model is the input schema; fields with defaults are optional. `run`
+  fills the defaults in and reports the input the function received as `input` in the envelope.
+- **Return type.** One of `Output` (a pydantic model), `Output | None`, `None`, or
+  `Dataset[Item]` (see Datasets). Anything else is rejected with `entry_point_invalid`.
+- **Logging.** `ctx.log.info(...)` writes a line to stderr. `print(...)` works too: `run` leaves
+  it on stdout (the result goes to the result file), and `inspect` moves it to stderr so stdout
+  holds only its JSON document.
+- **Time limit.** The platform sets it; the script does not.
+- **Starter.** `python -m mobilerun_routines new hello.py` writes a working script in this shape.
+
+`inspect` checks the file before it imports it (see below), so a script that is not set up this
+way gets every problem at once, each with a line number and a hint.
+
 ## Commands
 
 ```sh
@@ -81,17 +121,48 @@ missing, it prints one line on stderr and exits 64. The starter passes `inspect`
 
 On success it prints one JSON object on stdout and exits 0:
 `{"ok": true, "entrypoint", "async", "inputSchema", "outputSchema", "outputKind", "datasetKey",
-"sdkVersion"}`. `outputKind` is `value`, `dataset` or `none`. `datasetKey` is the serialization
-name of the item field marked with `key_field()` for a `Dataset[Item]` output, else `null`.
+"sdkVersion", "warnings"}`. `outputKind` is `value`, `dataset` or `none`. `datasetKey` is the
+serialization name of the item field marked with `key_field()` for a `Dataset[Item]` output, else
+`null`. `warnings` is a list of issues (see below), empty today.
 The script runs when it is imported; what it prints goes to stderr, so stdout holds exactly the
 JSON document (output written straight to file descriptor 1 is not intercepted).
 
-On failure it exits 3 and prints `{"ok": false, "error": {"code", "message"}}` on stdout (the
-one-line message goes to stderr as well). Codes: `no_entry_point`, `entry_point_invalid`,
-`import_failed` (the script cannot be read or raises while it is imported) and
-`schema_unsupported` (a model uses something outside the supported JSON Schema subset, or a
-`Dataset` item model does not have exactly one key field that serialises to a string or an
-integer).
+**Checks before the import.** `inspect` first reads the file as Python source (a syntax tree; it
+does not run any code). If that finds problems it reports all of them and stops before the
+import. Each check has a code:
+
+<!-- inspect-codes:start -->
+- `syntax_error`: the file does not parse; the issue has the line.
+- `import_wrong_module`: `script` (or `Context` from a `mobilerun*` module) is imported from a
+  module other than `mobilerun_routines`, for example `from mobilerun import script`.
+- `import_missing`: a function is decorated with `@script` but `script` is not imported from
+  `mobilerun_routines`.
+- `no_entry_point`: no function is marked with `@script`.
+- `entry_point_invalid`: two functions are marked with `@script`, or the signature does not fit
+  (found while importing).
+- `import_failed`: the script cannot be read or raises while it is imported. A `NameError` for
+  `script` or `Context`, or a missing `mobilerun`, `mobilerun_sandbox` or `mobilerun_sdk` module,
+  gets the same repair hint as the static checks.
+- `schema_unsupported`: a model uses something outside the supported JSON Schema subset, or a
+  `Dataset` item model does not have exactly one key field that serialises to a string or an
+  integer.
+<!-- inspect-codes:end -->
+
+**Failure.** `inspect` exits 3 and prints one JSON document on stdout:
+
+```json
+{"ok": false,
+ "error": {"code": "import_missing", "message": "...", "line": 9,
+           "repair": {"action": "fix_script", "hint": "Add `from mobilerun_routines import ..."}},
+ "errors": ["... every issue, in line order, the first one equal to `error` ..."],
+ "warnings": []}
+```
+
+An issue is `{"code", "message", "line"?, "repair"?}`. `line` is set when the problem has a
+place in the script; `repair` is `{"action": "fix_script", "hint"}`, where the hint names the
+correct import and a one-line example. `error` is always the first entry of `errors`, so callers
+that only read `error.code` and `error.message` keep working. stderr gets one line per error:
+`line N: message — hint`.
 
 The schemas are limited to a subset the platform can validate. `pattern`, `prefixItems`,
 `discriminator` and recursive models are rejected, and so is any `format` outside this list:
@@ -110,6 +181,12 @@ result file). The envelope is
 `{"ok": true, "outcome": "succeeded" | "partial", "result": ...}` (a partial one also has
 `partialReason`; with `ctx.state.save` it has `state`) or
 `{"ok": false, "error": {"code", "message", "retryable"}}`.
+
+Both envelopes also carry `"input"`: the input the entry point received, after validation and
+defaults (`model_dump(mode="json", by_alias=True)` of the `Input` model, so a field left out of
+the input file shows its default, and keys are the names `inputSchema` lists). It is there
+whenever the input validated: also for a failed or cancelled run, never for `input_invalid` and
+never when there is no result file. It can contain the values the platform passed in.
 
 Result keys are the serialization names of the output model (`serialization_alias`, or `alias`),
 exactly the property names `outputSchema` lists.
