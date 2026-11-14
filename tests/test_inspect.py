@@ -181,8 +181,9 @@ def test_property_named_like_keyword_is_fine(inspect_source):
 
 def _failure(out: str) -> dict:
     doc = json.loads(out)
-    assert doc["ok"] is False and set(doc) == {"ok", "error"}
-    assert set(doc["error"]) == {"code", "message"}
+    assert doc["ok"] is False and set(doc) == {"ok", "error", "errors", "warnings"}
+    assert doc["error"] == doc["errors"][0] and doc["warnings"] == []
+    assert {"code", "message"} <= set(doc["error"]) <= {"code", "message", "line", "repair"}
     return doc["error"]
 
 
@@ -191,6 +192,7 @@ def test_inspect_no_entry_point(inspect_source):
     assert code == 3 and "no entry point" in err and err.count("\n") == 1
     error = _failure(out)
     assert error["code"] == "no_entry_point" and "no entry point" in error["message"]
+    assert error["repair"]["action"] == "fix_script"
 
 
 def test_inspect_wrong_signature(inspect_source):
@@ -215,10 +217,11 @@ def test_inspect_duplicate_entry_point(inspect_source):
     ],
 )
 def test_inspect_import_time_failure(inspect_source, source, expected):
-    code, out, err = inspect_source(source)
+    code, out, err = inspect_source(script_source() + source)
     assert code == 3 and expected in err and err.count("\n") == 1
     error = _failure(out)
     assert error["code"] == "import_failed" and expected in error["message"]
+    assert error["line"] > script_source().count("\n")  # a line of the appended failing code
 
 
 def test_inspect_missing_file(tmp_path, capsys):
@@ -229,7 +232,7 @@ def test_inspect_missing_file(tmp_path, capsys):
 
 
 def test_inspect_error_message_is_one_line_in_json(inspect_source):
-    code, out, _ = inspect_source("raise RuntimeError('a\\nb')\n")
+    code, out, _ = inspect_source(script_source() + "raise RuntimeError('a\\nb')\n")
     assert code == 3 and "\n" not in _failure(out)["message"]
 
 
@@ -393,7 +396,9 @@ def test_a_top_level_print_does_not_corrupt_inspect_output(inspect_source):
 
 
 def test_a_top_level_print_does_not_corrupt_an_inspect_error(inspect_source):
-    code, out, err = inspect_source('print("user diagnostic")\nimport nonexistent_module_xyz\n')
+    code, out, err = inspect_source(
+        'print("user diagnostic")\n' + script_source() + "import nonexistent_module_xyz\n"
+    )
     assert code == 3
     assert _failure(out)["code"] == "import_failed"
     assert "user diagnostic" in err

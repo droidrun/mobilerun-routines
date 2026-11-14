@@ -7,8 +7,10 @@ import contextlib
 import json
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import NoReturn, get_args
 
+from ._check import SCRIPT_HINT, Issue, check_source, entry_point_issue, import_issue
 from ._template import STARTER_SCRIPT
 from ._version import SDK_VERSION
 from .context import DevicePlatform, DeviceTarget, RunInfo, RunMode
@@ -90,6 +92,13 @@ def _new(path: str) -> int:
 
 def _inspect(path: str) -> int:
     try:
+        source = Path(path).read_bytes()
+    except OSError as exc:
+        return _reject([Issue("import_failed", f"cannot read script: {exc}")])
+    # Static checks first: they report every problem at once and never run the script.
+    if issues := check_source(source, path):
+        return _reject(issues)
+    try:
         # The script runs at import: what it prints must not end up in the JSON on stdout.
         with contextlib.redirect_stdout(sys.stderr):
             entry = load_script(path)
@@ -103,27 +112,36 @@ def _inspect(path: str) -> int:
                 "outputKind": entry.output_kind,
                 "datasetKey": dataset_key(output) if entry.output_kind == "dataset" else None,
                 "sdkVersion": SDK_VERSION,
+                "warnings": [],
             }
     except OSError as exc:
-        return _reject("import_failed", f"cannot read script: {exc}")
+        return _reject([Issue("import_failed", f"cannot read script: {exc}")])
     except NoEntryPointError as exc:
-        return _reject("no_entry_point", str(exc))
+        return _reject([Issue("no_entry_point", str(exc), hint=SCRIPT_HINT)])
     except EntryPointError as exc:
-        return _reject("entry_point_invalid", str(exc))
+        return _reject([entry_point_issue(exc, path)])
     except ScriptImportError as exc:
-        return _reject("import_failed", str(exc))
+        return _reject([import_issue(exc.original, path)])
     except SchemaError as exc:
-        return _reject("schema_unsupported", str(exc))
+        return _reject([Issue("schema_unsupported", str(exc))])
     sys.stdout.write(json.dumps(document) + "\n")
     return EXIT_OK
 
 
-def _reject(code: str, message: str) -> int:
-    """Report why `inspect` failed: a JSON error on stdout and one line on stderr."""
-    message = " ".join(message.split())
-    document = {"ok": False, "error": {"code": code, "message": message}}
+def _reject(errors: list[Issue]) -> int:
+    """Report why `inspect` failed: a JSON document on stdout, one line per error on stderr.
+
+    `error` is the first of `errors`, the shape callers read before `errors` existed.
+    """
+    document = {
+        "ok": False,
+        "error": errors[0].as_json(),
+        "errors": [issue.as_json() for issue in errors],
+        "warnings": [],
+    }
     sys.stdout.write(json.dumps(document) + "\n")
-    sys.stderr.write(message + "\n")
+    for issue in errors:
+        sys.stderr.write(issue.describe() + "\n")
     return EXIT_NO_ENTRY_POINT
 
 

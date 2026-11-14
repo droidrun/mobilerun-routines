@@ -16,6 +16,16 @@ RESERVED_ERROR_CODES = (
     "dataset_too_large",
     "cancelled",
 )
+# Codes of the issues `inspect` reports (documented in the README).
+INSPECT_ERROR_CODES = (
+    "syntax_error",
+    "import_wrong_module",
+    "import_missing",
+    "no_entry_point",
+    "entry_point_invalid",
+    "import_failed",
+    "schema_unsupported",
+)
 ERROR_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 # Cap for `error.message` of every failure and for the reason of a partial result.
 ERROR_MESSAGE_MAX_CHARS = 500
