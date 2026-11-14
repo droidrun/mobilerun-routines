@@ -5,7 +5,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from script_source import GREETER, script_source
+from script_source import GREETER, script_source, without_input
 
 from mobilerun_routines import (
     ERROR_MESSAGE_MAX_CHARS,
@@ -20,7 +20,7 @@ from mobilerun_routines._version import SDK_VERSION
 def test_success(run_script):
     r = run_script(GREETER, {"name": "ada", "count": 2})
     assert r.code == 0
-    assert r.envelope == {
+    assert without_input(r.envelope) == {
         "ok": True,
         "outcome": "succeeded",
         "result": {"greeting": "hi ada x2"},
@@ -33,7 +33,7 @@ def test_script_error(run_script):
         script_source('raise ScriptError("login_failed", "bad password", retryable=True)')
     )
     assert r.code == 1
-    assert r.envelope == {
+    assert without_input(r.envelope) == {
         "ok": False,
         "error": {"code": "login_failed", "message": "bad password", "retryable": True},
     }
@@ -248,7 +248,7 @@ def test_async_entry_point(run_script):
 def test_none_return(run_script):
     r = run_script(script_source(sig="input: In", ret="None"))
     assert r.code == 0
-    assert r.envelope == {"ok": True, "outcome": "succeeded", "result": None}
+    assert without_input(r.envelope) == {"ok": True, "outcome": "succeeded", "result": None}
 
 
 def test_optional_output_returning_none(run_script):
@@ -335,7 +335,7 @@ def test_partial_with_result(run_script):
         )
     )
     assert r.code == 0
-    assert r.envelope == {
+    assert without_input(r.envelope) == {
         "ok": True,
         "outcome": "partial",
         "partialReason": "page 2 of 3 failed",
@@ -345,7 +345,7 @@ def test_partial_with_result(run_script):
 
 def test_partial_without_result(run_script):
     r = run_script(script_source('ctx.partial("nothing usable")', ret="None"))
-    assert r.envelope == {
+    assert without_input(r.envelope) == {
         "ok": True,
         "outcome": "partial",
         "partialReason": "nothing usable",
@@ -387,7 +387,7 @@ def test_result_exactly_at_the_limit(run_script):
 def test_result_one_byte_over_the_limit(run_script):
     r = run_script(SIZED, {"extra": 1})
     assert r.code == 1
-    assert r.envelope == {
+    assert without_input(r.envelope) == {
         "ok": False,
         "error": {
             "code": "result_too_large",
@@ -497,7 +497,7 @@ def test_state_exactly_at_the_limit(run_script):
 def test_state_oversize_fails_the_run(run_script):
     r = run_script(_state_size_script(1), state=None)
     assert r.code == 1
-    assert r.envelope == {
+    assert without_input(r.envelope) == {
         "ok": False,
         "error": {
             "code": "state_too_large",
@@ -578,3 +578,57 @@ def test_module_invocation_in_a_subprocess(write_script, tmp_path):
 def test_sdk_version_matches_pyproject():
     data = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text())
     assert data["project"]["version"] == SDK_VERSION
+
+
+# the envelope reports the input the entry point received
+
+ALIASED_MODELS = """
+class In(BaseModel):
+    name: str = "world"
+    max_pages: int = Field(default=3, serialization_alias="maxPages")
+    since: date | None = None
+
+class Out(BaseModel):
+    greeting: str
+"""
+
+
+def test_the_envelope_reports_the_input_after_defaults(run_script):
+    r = run_script(script_source('return Out(greeting="x")', models=ALIASED_MODELS), {})
+    assert r.code == 0
+    assert r.envelope["input"] == {"name": "world", "maxPages": 3, "since": None}
+
+
+def test_the_reported_input_is_json_mode_with_aliases(run_script):
+    r = run_script(
+        script_source('return Out(greeting="x")', models=ALIASED_MODELS),
+        {"since": "2026-11-13", "max_pages": 5},
+    )
+    assert r.envelope["input"] == {"name": "world", "maxPages": 5, "since": "2026-11-13"}
+
+
+def test_a_failed_run_reports_the_input_too(run_script):
+    r = run_script(script_source('raise ScriptError("nope", "no")'), {"name": "ada"})
+    assert r.code == 1 and r.envelope["error"]["code"] == "nope"
+    assert r.envelope["input"] == {"name": "ada", "count": 1, "extra": 0}
+
+
+def test_an_unexpected_exception_reports_the_input(run_script):
+    r = run_script(script_source('raise RuntimeError("boom")'), {})
+    assert r.envelope["error"]["code"] == "script_error"
+    assert r.envelope["input"]["name"] == "x"
+
+
+def test_invalid_input_has_no_input_field(run_script):
+    r = run_script(script_source(), {"count": "many"})
+    assert r.code == 2 and "input" not in r.envelope
+
+
+def test_no_entry_point_writes_no_envelope_at_all(run_script):
+    r = run_script("x = 1\n")
+    assert r.code == 3 and r.envelope is None
+
+
+def test_an_import_time_failure_has_no_input_field(run_script):
+    r = run_script("raise RuntimeError('at import')\n")
+    assert r.code == 1 and "input" not in r.envelope

@@ -27,6 +27,11 @@ class Out(BaseModel):
 """
 
 
+def without_input(envelope: dict) -> dict:
+    """The envelope minus the `input` the runner echoes, for tests about something else."""
+    return {key: value for key, value in envelope.items() if key != "input"}
+
+
 def script_source(
     body: str = "pass",
     *,
