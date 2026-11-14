@@ -35,6 +35,9 @@ class ScriptError(Exception):
         self.retryable = retryable
 
 
+NO_ENTRY_POINT_MESSAGE = "no entry point: mark one function with @script"
+
+
 class EntryPointError(Exception):
     """The script has no usable entry point (missing, duplicate or wrong signature)."""
 

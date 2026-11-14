@@ -3,7 +3,7 @@
 import json
 
 import pytest
-from script_source import script_source
+from script_source import script_source, without_input
 
 from mobilerun_routines import ERROR_MESSAGE_MAX_CHARS, RESERVED_ERROR_CODES
 
@@ -14,7 +14,7 @@ from mobilerun_routines import ERROR_MESSAGE_MAX_CHARS, RESERVED_ERROR_CODES
 def test_script_cannot_take_a_reserved_code(run_script, code):
     r = run_script(script_source(f'raise ScriptError({code!r}, "mine", retryable=True)'))
     assert r.code == 1
-    assert r.envelope == {
+    assert without_input(r.envelope) == {
         "ok": False,
         "error": {"code": "script_error", "message": "mine", "retryable": True},
     }

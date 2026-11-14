@@ -7,7 +7,7 @@ import types
 from pathlib import Path
 
 from .entry import EntryPoint, take
-from .errors import EntryPointError, NoEntryPointError
+from .errors import NO_ENTRY_POINT_MESSAGE, EntryPointError, NoEntryPointError
 
 MODULE_NAME = "mobilerun_user_script"
 
@@ -20,11 +20,16 @@ class ScriptImportError(Exception):
         self.original = exc
 
 
+class ScriptSyntaxError(ScriptImportError):
+    """The script does not compile (`original` is the `SyntaxError` or `ValueError`)."""
+
+
 def load_script(path: str | Path) -> EntryPoint:
     """Execute the script module and return its entry point.
 
-    Raises `OSError` when the file cannot be read, `ScriptImportError` when executing it fails
-    and `EntryPointError` for a missing or invalid entry point.
+    Raises `OSError` when the file cannot be read, `ScriptImportError` when compiling or executing
+    it fails (`ScriptSyntaxError` for the former) and `EntryPointError` for a missing or invalid
+    entry point.
     """
     source = Path(path).read_bytes()
     take(MODULE_NAME)
@@ -32,7 +37,7 @@ def load_script(path: str | Path) -> EntryPoint:
     try:
         code = compile(source, str(path), "exec")
     except (SyntaxError, ValueError) as exc:
-        raise ScriptImportError(exc) from exc
+        raise ScriptSyntaxError(exc) from exc
     module = types.ModuleType(MODULE_NAME)
     module.__file__ = str(path)
     sys.modules[MODULE_NAME] = module
@@ -44,5 +49,5 @@ def load_script(path: str | Path) -> EntryPoint:
         raise ScriptImportError(exc) from exc
     entry = take(MODULE_NAME)
     if entry is None:
-        raise NoEntryPointError("no entry point: mark one function with @script")
+        raise NoEntryPointError(NO_ENTRY_POINT_MESSAGE)
     return entry

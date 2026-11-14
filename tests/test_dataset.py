@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-from script_source import script_source
+from script_source import script_source, without_input
 
 from mobilerun_routines import DATASET_MAX_BYTES, Dataset
 
@@ -74,7 +74,7 @@ def test_push_writes_one_json_line_per_item(run_script, dataset_file):
     r = run_script(ds_script(PUSH_TWO), extra_args=["--dataset-file", str(dataset_file)])
     assert r.code == 0, r.envelope
     assert lines(dataset_file) == [{"id": "a", "price": 1.5}, {"id": "b", "price": 2.0}]
-    assert r.envelope == {
+    assert without_input(r.envelope) == {
         "ok": True,
         "outcome": "succeeded",
         "result": None,
@@ -318,7 +318,8 @@ def test_sigterm_leaves_a_cancelled_envelope_and_the_pushed_lines(write_script, 
     code = _terminate(proc, ready)
     assert code == 1
     envelope = json.loads((tmp_path / "out.json").read_text())
-    assert envelope == {**CANCELLED, "dataset": {"items": 2, "bytes": dataset_path.stat().st_size}}
+    size = dataset_path.stat().st_size
+    assert without_input(envelope) == {**CANCELLED, "dataset": {"items": 2, "bytes": size}}
     assert lines(dataset_path) == [{"id": "a", "price": 0.0}, {"id": "b", "price": 2.0}]
 
 
@@ -326,14 +327,16 @@ def test_sigterm_without_a_dataset_file_has_no_dataset_counts(write_script, tmp_
     body = 'import time\nopen(input.ready, "w").close()\ntime.sleep(60)'
     proc, ready, _ = _spawn(write_script(ds_script(body, ret="Out")), tmp_path, dataset=False)
     assert _terminate(proc, ready) == 1
-    assert json.loads((tmp_path / "out.json").read_text()) == CANCELLED
+    envelope = json.loads((tmp_path / "out.json").read_text())
+    assert without_input(envelope) == CANCELLED
+    assert envelope["input"]["ready"].endswith("ready")  # the validated input survives
 
 
 def test_sigterm_in_a_busy_loop(write_script, tmp_path):
     body = 'open(input.ready, "w").close()\nwhile True:\n    sum(range(1000))'
     proc, ready, _ = _spawn(write_script(ds_script(body, ret="Out")), tmp_path, dataset=False)
     assert _terminate(proc, ready) == 1
-    assert json.loads((tmp_path / "out.json").read_text()) == CANCELLED
+    assert without_input(json.loads((tmp_path / "out.json").read_text())) == CANCELLED
 
 
 def test_the_sigterm_handler_is_restored_after_an_in_process_run(run_script):
@@ -496,4 +499,4 @@ def test_cancellation_wins_over_what_the_script_does_afterwards(write_script, tm
     """
     proc, ready, _ = _spawn(write_script(ds_script(body, ret="Out")), tmp_path, dataset=False)
     assert _terminate(proc, ready) == 1
-    assert json.loads((tmp_path / "out.json").read_text()) == CANCELLED
+    assert without_input(json.loads((tmp_path / "out.json").read_text())) == CANCELLED
